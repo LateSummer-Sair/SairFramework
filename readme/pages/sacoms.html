@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SaComS 工具包 - SairFramework</title>
+    <link rel="stylesheet" href="../css/style.css">
+    <style>
+        .toc-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 10px;
+            margin: 20px 0;
+        }
+        .toc-item {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 12px 16px;
+            color: var(--accent2);
+            text-decoration: none;
+            font-size: 0.85rem;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .toc-item:hover {
+            border-color: var(--accent2);
+            background: rgba(0,206,201,0.08);
+            transform: translateY(-1px);
+        }
+    </style>
+</head>
+<body>
+<div class="doc-container" id="top">
+
+    <div class="doc-header ani-fade-in-up">
+        <h1 class="doc-title">SaComS 工具包</h1>
+        <p class="doc-subtitle">SairFramework 内置的综合性 Java 工具类库，提供文件管理、数据结构、字符串处理、网络、数据库、图像等全方位能力。</p>
+    </div>
+
+    <div class="info-box tip ani-fade-in-up ani-delay-1">
+        <div class="info-box-title">📦 引入方式</div>
+        <p>SaComS.jar 位于 <code>plugins/modlib/SaComS.jar</code>，由框架自动加载。插件中可直接 <code>import sair.sacoms.*</code> 使用。</p>
+    </div>
+
+    <!-- 目录导航 -->
+    <h2 class="ani-fade-in-up ani-delay-1">📑 工具类目录</h2>
+    <div class="toc-grid ani-fade-in-up ani-delay-2">
+        <a class="toc-item" href="#filemana">📁 FileMana 文件管理</a>
+        <a class="toc-item" href="#sairlists">📋 SairLists 链表</a>
+        <a class="toc-item" href="#stredit">✂️ StrEdit 字符串</a>
+        <a class="toc-item" href="#cmd">⌨️ CMD 命令行</a>
+        <a class="toc-item" href="#timmer">⏱️ Timmer 时间</a>
+        <a class="toc-item" href="#urler">🔗 Urler 路径</a>
+        <a class="toc-item" href="#doimage">🖼️ DoImage 图像</a>
+        <a class="toc-item" href="#jdbcs">🗄️ JDBCS 数据库</a>
+        <a class="toc-item" href="#py">🔤 PY 拼音</a>
+        <a class="toc-item" href="#search">🔍 Search 搜索</a>
+        <a class="toc-item" href="#mathcast">🔢 MathCast 数学</a>
+        <a class="toc-item" href="#randoms">🎲 Randoms 随机</a>
+        <a class="toc-item" href="#ftp">📡 FTP 文件传输</a>
+        <a class="toc-item" href="#codereader">📖 CodeReader 代码</a>
+        <a class="toc-item" href="#tables">📊 Tables 表格</a>
+        <a class="toc-item" href="#others">🔧 其他工具</a>
+    </div>
+
+    <hr class="gradient-divider">
+
+    <!-- FileMana -->
+    <h2 id="filemana" class="ani-fade-in-up">📁 FileMana — 文件管理</h2>
+    <div class="card ani-fade-in-up">
+        <p><strong>包路径：</strong><code>sair.sacoms.FileMana</code></p>
+        <p>全面的文件 I/O 操作工具，支持读写、复制、删除、压缩、ZIP 解压、网络下载。</p>
+
+        <h4>编码常量 Key</h4>
+        <table class="doc-table">
+            <thead><tr><th>常量</th><th>说明</th></tr></thead>
+            <tbody>
+                <tr><td><code>FileMana.GBK</code></td><td>GBK 编码 Key（gb2312）</td></tr>
+                <tr><td><code>FileMana.UTF_8</code></td><td>UTF-8 编码 Key</td></tr>
+                <tr><td><code>FileMana.CreateNewE(String enc)</code></td><td>创建自定义编码 Key</td></tr>
+            </tbody>
+        </table>
+
+        <h4>文件筛选 Key</h4>
+        <table class="doc-table">
+            <thead><tr><th>常量</th><th>说明</th></tr></thead>
+            <tbody>
+                <tr><td><code>FileMana.GETALL</code></td><td>递归获取所有文件</td></tr>
+                <tr><td><code>FileMana.GETDIR</code></td><td>仅获取目录</td></tr>
+                <tr><td><code>FileMana.GETFILES</code></td><td>仅获取文件</td></tr>
+            </tbody>
+        </table>
+
+        <h4>核心方法</h4>
+        <table class="doc-table">
+            <thead><tr><th>方法</th><th>说明</th></tr></thead>
+            <tbody>
+                <tr><td><code>delFiles(String url)</code></td><td>删除文件或目录</td></tr>
+                <tr><td><code>copyFiles(String in, String out)</code></td><td>复制文件/目录到目标位置</td></tr>
+                <tr><td><code>netDownloader(URL in, String out)</code></td><td>从 URL 下载文件</td></tr>
+                <tr><td><code>toZips(String in, String out)</code></td><td>压缩为 ZIP</td></tr>
+                <tr><td><code>zipOuts(String in, String out)</code></td><td>解压 ZIP</td></tr>
+                <tr><td><code>getFilesToList(String url, Key all)</code></td><td>获取文件路径列表（SairLists）</td></tr>
+                <tr><td><code>getFilesToArr(String url, Key all)</code></td><td>获取文件路径数组（String[]）</td></tr>
+                <tr><td><code>getFileToList(String url, Key enc)</code></td><td>读取文件到 SairLists</td></tr>
+                <tr><td><code>getFileToStringArr(String url, Key enc)</code></td><td>读取文件到 String[]</td></tr>
+                <tr><td><code>addToFilesEnd(String url, String[], boolean LN)</code></td><td>追加内容到文件末尾</td></tr>
+                <tr><td><code>memorriesToIO(String url, String[], boolean LN)</code></td><td>写入内容到文件（覆盖）</td></tr>
+                <tr><td><code>getRunPack(String url)</code></td><td>读取 Jar 内部资源文件流</td></tr>
+                <tr><td><code>getPackFileToList(String url, Key enc)</code></td><td>读取 Jar 内文本文件到 SairLists</td></tr>
+            </tbody>
+        </table>
+
+        <pre><code><span class="cmt">// 使用示例</span>
+<span class="kw">import</span> <span class="typ">sair.sacoms.FileMana</span>;
+
+<span class="cmt">// 读取文件</span>
+<span class="typ">String</span>[] lines = <span class="typ">FileMana</span>.<span class="fn">getFileToStringArr</span>(<span class="str">"data.txt"</span>, <span class="typ">FileMana</span>.UTF_8);
+
+<span class="cmt">// 写入文件</span>
+<span class="typ">FileMana</span>.<span class="fn">memorriesToIO</span>(<span class="str">"output.txt"</span>, <span class="kw">new</span> <span class="typ">String</span>[]{<span class="str">"line1"</span>,<span class="str">"line2"</span>}, <span class="kw">true</span>);
+
+<span class="cmt">// 遍历目录（递归）</span>
+<span class="typ">SairLists</span>&lt;<span class="typ">String</span>&gt; files = <span class="typ">FileMana</span>.<span class="fn">getFilesToList</span>(<span class="str">"D:\\mydir"</span>, <span class="typ">FileMana</span>.GETALL);</code></pre>
+    </div>
+
+    <!-- SairLists -->
+    <h2 id="sairlists" class="ani-fade-in-up">📋 SairLists&lt;T&gt; — 双向链表</h2>
+    <div class="card ani-fade-in-up">
+        <p><strong>包路径：</strong><code>sair.sacoms.SairLists&lt;T&gt;</code></p>
+        <p>高性能泛型双向链表，基于页式存储，支持快速随机访问、插入、删除，实现了 <code>Iterable&lt;T&gt;</code> 可 foreach 遍历。</p>
+
+        <table class="doc-table">
+            <thead><tr><th>方法</th><th>说明</th></tr></thead>
+            <tbody>
+                <tr><td><code>SairLists(T... ts)</code></td><td>构造并初始化元素</td></tr>
+                <tr><td><code>add(T index)</code></td><td>在末尾添加元素</td></tr>
+                <tr><td><code>insert(T index, int id)</code></td><td>在指定位置插入元素</td></tr>
+                <tr><td><code>delete(int id)</code></td><td>删除指定位置元素并返回</td></tr>
+                <tr><td><code>reMove(int id)</code></td><td>移除指定位置元素（不返回值）</td></tr>
+                <tr><td><code>setTo(int id, T newVal)</code></td><td>修改指定位置元素</td></tr>
+                <tr><td><code>getIndex(int id)</code></td><td>获取指定位置元素</td></tr>
+                <tr><td><code>getLength()</code></td><td>获取列表长度</td></tr>
+                <tr><td><code>getHeadIndex()</code></td><td>获取头部元素</td></tr>
+                <tr><td><code>getEndIndex()</code></td><td>获取尾部元素</td></tr>
+                <tr><td><code>setArrToList(T... ts)</code></td><td>批量添加元素</td></tr>
+                <tr><td><code>setListAllToHead(SairLists&lt;T&gt;)</code></td><td>将另一个列表的元素添加到头部</td></tr>
+                <tr><td><code>setListAllToEnd(SairLists&lt;T&gt;)</code></td><td>将另一个列表的元素添加到尾部</td></tr>
+                <tr><td><code>AtoB(int idA, int idB)</code></td><td>交换两个位置的元素</td></tr>
+                <tr><td><code>existsIndex(T)</code></td><td>检查元素是否存在</td></tr>
+                <tr><td><code>getIndexId(T)</code></td><td>获取所有匹配元素的索引列表</td></tr>
+                <tr><td><code>getListObjArr()</code></td><td>转为 Object[]</td></tr>
+                <tr><td><code>getListArr(Class)</code></td><td>转为指定类型的数组</td></tr>
+                <tr><td><code>reStartClearAll()</code></td><td>重置清空列表</td></tr>
+                <tr><td><code>creatSairListsArray(int lv, int len, Class)</code></td><td><code>static</code> — 创建多维 SairLists 数组</td></tr>
+            </tbody>
+        </table>
+
+        <pre><code><span class="cmt">// 使用示例</span>
+<span class="typ">SairLists</span>&lt;<span class="typ">String</span>&gt; list = <span class="kw">new</span> <span class="typ">SairLists</span>&lt;&gt;(<span class="str">"A"</span>, <span class="str">"B"</span>, <span class="str">"C"</span>);
+list.<span class="fn">add</span>(<span class="str">"D"</span>);
+list.<span class="fn">insert</span>(<span class="str">"X"</span>, 0);      <span class="cmt">// 在开头插入 → [X, A, B, C, D]</span>
+list.<span class="fn">setTo</span>(2, <span class="str">"Z"</span>);         <span class="cmt">// → [X, A, Z, C, D]</span>
+list.<span class="fn">delete</span>(1);             <span class="cmt">// → [X, Z, C, D]</span>
+
+<span class="cmt">// foreach 遍历</span>
+<span class="kw">for</span> (<span class="typ">String</span> s : list)
+    <span class="typ">SairCons</span>.<span class="fn">println</span>(s);</code></pre>
+    </div>
+
+    <!-- StrEdit -->
+    <h2 id="stredit" class="ani-fade-in-up">✂️ StrEdit — 字符串编辑</h2>
+    <div class="card ani-fade-in-up">
+        <p><strong>包路径：</strong><code>sair.sacoms.StrEdit</code></p>
+        <p>提供字符串分割、合并、类型转换、模式删除等功能。</p>
+
+        <h4>模式 Key</h4>
+        <table class="doc-table">
+            <thead><tr><th>常量</th><th>说明</th></tr></thead>
+            <tbody>
+                <tr><td><code>StrEdit.LINEMODE</code></td><td>整行删除模式（匹配到整行则删除整行）</td></tr>
+                <tr><td><code>StrEdit.ONEMODE</code></td><td>逐字删除模式（仅删除匹配的字符）</td></tr>
+            </tbody>
+        </table>
+
+        <table class="doc-table">
+            <thead><tr><th>方法</th><th>说明</th></tr></thead>
+            <tbody>
+                <tr><td><code>StrEdit(String... dir)</code></td><td>构造，指定要筛选/删除的字符串</td></tr>
+                <tr><td><code>setDir(String... dir)</code></td><td>设置筛选数组</td></tr>
+                <tr><td><code>toRemove(SairLists, Key)</code></td><td>按模式删除列表中的匹配内容</td></tr>
+                <tr><td><code>toStr(Object[], boolean line)</code></td><td><code>static</code> — 数组合并为字符串</td></tr>
+                <tr><td><code>splitStr(String)</code></td><td><code>static</code> — 将字符串拆分为字符数组</td></tr>
+                <tr><td><code>castStr(Object[])</code></td><td><code>static</code> — Object[] 转 String[]</td></tr>
+                <tr><td><code>getNetDataString(InputStream, int)</code></td><td><code>static</code> — 从流读取字符串</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- CMD -->
+    <h2 id="cmd" class="ani-fade-in-up">⌨️ CMD — 命令行调用</h2>
+    <div class="card ani-fade-in-up">
+        <p><strong>包路径：</strong><code>sair.sacoms.CMD</code></p>
+        <p>跨平台命令行调用工具，支持 Windows CMD 和 Linux Bash。</p>
+
+        <table class="doc-table">
+            <thead><tr><th>成员/方法</th><th>说明</th></tr></thead>
+            <tbody>
+                <tr><td><code>CMD.win</code></td><td>Windows CMD Key</td></tr>
+                <tr><td><code>CMD.lin</code></td><td>Linux Bash Key</td></tr>
+                <tr><td><code>runCommands(Key, String...)</code></td><td>执行命令并返回结果列表</td></tr>
+                <tr><td><code>autoRunCommands(String...)</code></td><td>自动识别系统执行命令</td></tr>
+                <tr><td><code>autoOpenToUrl(String...)</code></td><td>自动识别系统打开网页</td></tr>
+                <tr><td><code>openToUrl(Key, String...)</code></td><td>指定系统类型打开网页</td></tr>
+            </tbody>
+        </table>
+
+        <pre><code><span class="cmt">// 使用示例</span>
+<span class="typ">SairLists</span>&lt;<span class="typ">String</span>&gt; result = <span class="typ">CMD</span>.<span class="fn">autoRunCommands</span>(<span class="str">"dir"</span>, <span class="str">"echo done"</span>);
+
+<span class="cmt">// 打开网页</span>
+<span class="typ">CMD</span>.<span class="fn">autoOpenToUrl</span>(<span class="str">"https://www.example.com"</span>);</code></pre>
+    </div>
+
+    <!-- Timmer -->
+    <h2 id="timmer" class="ani-fade-in-up">⏱️ Timmer — 时间工具</h2>
+    <div class="card ani-fade-in-up">
+        <p><strong>包路径：</strong><code>sair.sacoms.Timmer</code></p>
+        <p>完整的时间处理工具，支持计时器、日期格式化、时间差计算。</p>
+
+        <table class="doc-table">
+            <thead><tr><th>方法</th><th>说明</th></tr></thead>
+            <tbody>
+                <tr><td><code>Timmer() / Timmer(boolean)</code></td><td>构造，boolean=true 自动启动计时</td></tr>
+                <tr><td><code>Timmer(char, char)</code></td><td>构造并自定义日期分隔符</td></tr>
+                <tr><td><code>getTodayStr()</code></td><td>获取当前日期时间字符串</td></tr>
+                <tr><td><code>getToday()</code></td><td><code>static</code> — 获取中文格式日期（年月日时分秒）</td></tr>
+                <tr><td><code>getYear() / getMon() / getDay()</code></td><td>获取年/月/日</td></tr>
+                <tr><td><code>getHour() / getMin() / getS()</code></td><td>获取时/分/秒</td></tr>
+                <tr><td><code>Start() / Stop()</code></td><td>启动/停止计时器</td></tr>
+                <tr><td><code>getUseTime()</code></td><td>获取计时器累计时间</td></tr>
+                <tr><td><code>reStartUseTime()</code></td><td>重置计时器</td></tr>
+                <tr><td><code>setTimmerRunnable(Runnable)</code></td><td>设置定时回调任务</td></tr>
+                <tr><td><code>setSleepTime(long)</code></td><td>设置计时器 tick 间隔</td></tr>
+                <tr><td><code>getTime(String t1, String t2)</code></td><td><code>static</code> — 计算两个时间差</td></tr>
+                <tr><td><code>castTime(String)</code></td><td><code>static</code> — 时间字符串转秒数</td></tr>
+                <tr><td><code>getSDF()</code></td><td><code>static</code> — 获取默认 SimpleDateFormat</td></tr>
+            </tbody>
+        </table>
+
+        <pre><code><span class="cmt">// 使用示例</span>
+<span class="typ">Timmer</span> t = <span class="kw">new</span> <span class="typ">Timmer</span>(<span class="kw">true</span>);  <span class="cmt">// 自动开始计时</span>
+<span class="cmt">// ... 执行一些操作 ...</span>
+<span class="typ">SairCons</span>.<span class="fn">println</span>(<span class="str">"耗时: "</span> + t.<span class="fn">getUseTime</span>() + <span class="str">" 秒"</span>);
+
+<span class="cmt">// 获取中文日期</span>
+<span class="typ">String</span> today = <span class="typ">Timmer</span>.<span class="fn">getToday</span>();  <span class="cmt">// → "2026年05月29日15时30分00秒"</span></code></pre>
+    </div>
+
+    <!-- Urler -->
+    <h2 id="urler" class="ani-fade-in-up">🔗 Urler — 路径解析</h2>
+    <div class="card ani-fade-in-up">
+        <p><strong>包路径：</strong><code>sair.sacoms.Urler</code></p>
+        <p>智能路径解析器，自动处理跨平台路径分隔符、支持 <code>//</code> 表示空格。</p>
+
+        <table class="doc-table">
+            <thead><tr><th>方法</th><th>说明</th></tr></thead>
+            <tbody>
+                <tr><td><code>Urler(String url)</code></td><td>构造路径对象</td></tr>
+                <tr><td><code>setURL(String url)</code></td><td>重新设置路径</td></tr>
+                <tr><td><code>getUrl()</code></td><td>获取完整路径</td></tr>
+                <tr><td><code>getHD()</code></td><td>获取父目录路径</td></tr>
+                <tr><td><code>getF()</code></td><td>获取文件名（含扩展名）</td></tr>
+                <tr><td><code>getFileName()</code></td><td>获取文件名（不含扩展名）</td></tr>
+                <tr><td><code>getFileLastName()</code></td><td>获取扩展名</td></tr>
+                <tr><td><code>getFileInHardDisk()</code></td><td>获取盘符</td></tr>
+                <tr><td><code>getFileFatherUrl()</code></td><td>获取中间路径部分</td></tr>
+                <tr><td><code>getUrlFound()</code></td><td>检查路径是否存在</td></tr>
+                <tr><td><code>getHDFound()</code></td><td>检查父目录是否存在</td></tr>
+                <tr><td><code>creatThisUrl()</code></td><td>创建此路径（文件）</td></tr>
+                <tr><td><code>creatThisHD()</code></td><td>创建父目录</td></tr>
+                <tr><td><code>getEques(String ext)</code></td><td>比较扩展名</td></tr>
+                <tr><td><code>getOS()</code></td><td><code>static</code> — 检测操作系统类型</td></tr>
+                <tr><td><code>getPath()</code></td><td><code>static</code> — 获取当前运行目录</td></tr>
+                <tr><td><code>getUrlerPathesForJMD(String[])</code></td><td><code>static</code> — 路径转 JMD 格式</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- DoImage -->
+    <h2 id="doimage" class="ani-fade-in-up">🖼️ DoImage — 图像处理</h2>
+    <div class="card ani-fade-in-up">
+        <p><strong>包路径：</strong><code>sair.sacoms.DoImage</code></p>
+        <p>图像裁剪、合并、文字转图片等功能。</p>
+
+        <table class="doc-table">
+            <thead><tr><th>成员/方法</th><th>说明</th></tr></thead>
+            <tbody>
+                <tr><td><code>DoImage.Horizontal</code></td><td>水平合并 Key</td></tr>
+                <tr><td><code>DoImage.Vertical</code></td><td>垂直合并 Key</td></tr>
+                <tr><td><code>cut(BufferedImage, Point, Plane)</code></td><td><code>static</code> — 裁剪图像</td></tr>
+                <tr><td><code>merge(Key, Color, BufferedImage...)</code></td><td><code>static</code> — 合并多张图像</td></tr>
+                <tr><td><code>stringToPng(Key, File, Color, Color, Font, String...)</code></td><td><code>static</code> — 文字转 PNG 图片</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- JDBCS -->
+    <h2 id="jdbcs" class="ani-fade-in-up">🗄️ JDBCS — 数据库连接</h2>
+    <div class="card ani-fade-in-up">
+        <p><strong>包路径：</strong><code>sair.sacoms.JDBCS</code></p>
+        <p>简化 JDBC 操作，内置 SQL Server 驱动 Key。</p>
+
+        <table class="doc-table">
+            <thead><tr><th>成员/方法</th><th>说明</th></tr></thead>
+            <tbody>
+                <tr><td><code>JDBCS.SQLSERVER_2008</code></td><td>SQL Server JDBC 驱动 Key</td></tr>
+                <tr><td><code>creatNewJDBCkey(String)</code></td><td><code>static</code> — 创建自定义驱动 Key</td></tr>
+                <tr><td><code>JDBCS(Key, String url, String user, Password, Key)</code></td><td>构造并连接</td></tr>
+                <tr><td><code>getConnection()</code></td><td>获取 Connection</td></tr>
+                <tr><td><code>getStatement()</code></td><td>获取 Statement</td></tr>
+                <tr><td><code>getResultSet(String sql)</code></td><td>执行查询返回 ResultSet</td></tr>
+                <tr><td><code>toRowData(String sql, String col)</code></td><td>查询指定列返回 SairLists</td></tr>
+                <tr><td><code>closeAll()</code></td><td>关闭所有连接</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- PY -->
+    <h2 id="py" class="ani-fade-in-up">🔤 PY — 拼音转换</h2>
+    <div class="card ani-fade-in-up">
+        <p><strong>包路径：</strong><code>sair.sacoms.PY</code></p>
+        <p>汉字与拼音双向转换工具，内置完整拼音词库。</p>
+
+        <table class="doc-table">
+            <thead><tr><th>方法</th><th>说明</th></tr></thead>
+            <tbody>
+                <tr><td><code>PY()</code></td><td>使用默认词库构造</td></tr>
+                <tr><td><code>PYgetCH(String py)</code></td><td>拼音 → 汉字数组</td></tr>
+                <tr><td><code>CHgetPY(Character ch)</code></td><td>汉字 → 拼音数组</td></tr>
+                <tr><td><code>getPtS()</code></td><td>获取拼音→汉字映射表</td></tr>
+                <tr><td><code>getStP()</code></td><td>获取汉字→拼音映射表</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Search -->
+    <h2 id="search" class="ani-fade-in-up">🔍 Search&lt;T&gt; — 搜索引擎</h2>
+    <div class="card ani-fade-in-up">
+        <p><strong>包路径：</strong><code>sair.sacoms.Search&lt;T&gt;</code></p>
+        <p>内存搜索引擎，支持按关键字快速检索对象，按匹配度排序。</p>
+
+        <table class="doc-table">
+            <thead><tr><th>方法</th><th>说明</th></tr></thead>
+            <tbody>
+                <tr><td><code>add(String id, String key, T obj)</code></td><td>添加可搜索条目</td></tr>
+                <tr><td><code>serachObjectByID(String id)</code></td><td>按 ID 精确查找</td></tr>
+                <tr><td><code>serachIDsByKey(Class, String key, Integer limit)</code></td><td>按关键字搜索，返回匹配 ID 数组（按相关度排序）</td></tr>
+                <tr><td><code>serachObjectsByIDs(Class, String... ids)</code></td><td>按 ID 数组批量获取对象</td></tr>
+                <tr><td><code>reStartClearAll()</code></td><td>重置搜索引擎</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- MathCast -->
+    <h2 id="mathcast" class="ani-fade-in-up">🔢 MathCast — 数学转换</h2>
+    <div class="card ani-fade-in-up">
+        <p><strong>包路径：</strong><code>sair.sacoms.MathCast</code></p>
+        <p>数字与中文（大小写）互转，支持整数和小数。</p>
+
+        <table class="doc-table">
+            <thead><tr><th>成员/方法</th><th>说明</th></tr></thead>
+            <tbody>
+                <tr><td><code>MathCast.ToSmallChinese</code></td><td>小写中文 Key（一二三）</td></tr>
+                <tr><td><code>MathCast.ToBigChinese</code></td><td>大写中文 Key（壹贰叁）</td></tr>
+                <tr><td><code>MathCast.ToDefault</code></td><td>纯数字 Key</td></tr>
+                <tr><td><code>IntToString(int, Key)</code></td><td>数字→中文</td></tr>
+                <tr><td><code>StringsStringToInt(String)</code></td><td>中文→数字</td></tr>
+                <tr><td><code>DoubleToString(double, Key)</code></td><td>小数→中文</td></tr>
+                <tr><td><code>StringToDouble(String)</code></td><td>中文小数→double</td></tr>
+                <tr><td><code>custoString(long/string, Key)</code></td><td>通用数字→字符串转换</td></tr>
+                <tr><td><code>StrMathCustoLong(String)</code></td><td>数字字符串→long</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Randoms -->
+    <h2 id="randoms" class="ani-fade-in-up">🎲 Randoms — 随机数</h2>
+    <div class="card ani-fade-in-up">
+        <p><strong>包路径：</strong><code>sair.sacoms.Randoms</code></p>
+
+        <table class="doc-table">
+            <thead><tr><th>方法</th><th>说明</th></tr></thead>
+            <tbody>
+                <tr><td><code>Randoms(int[] dir)</code></td><td>构造，指定候选值数组</td></tr>
+                <tr><td><code>setDir(int[] dir)</code></td><td>设置候选值数组</td></tr>
+                <tr><td><code>nextInt(int min, int max)</code></td><td><code>static</code> — 获取 [min, max] 范围内的随机整数</td></tr>
+                <tr><td><code>nextInt()</code></td><td>从候选数组中随机选取一个值</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+   <!-- 其他工具 -->
+    <h2 id="others" class="ani-fade-in-up">🔧 其他实用工具</h2>
+
+    <div id="ftp" class="card ani-fade-in-up">
+        <h3>📻 FTP — FTP 客户端 <span class="badge badge-accent">sair.sacoms.FTP</span></h3>
+        <p>基于 <b>Apache Commons Net</b> 的 FTP 客户端封装。提供连接认证、文件上传（支持本地文件路径和 <code>InputStream</code> 两种方式）、文件下载、切换工作目录、递归创建多级目录、删除远程文件等完整功能。默认使用匿名登录（anonymous），可自定义主机地址、端口（默认21）、用户名、密码和字符编码（默认GBK）。</p>
+    </div>
+
+    <div id="codereader" class="card ani-fade-in-up">
+        <h3>📖 CodeReader — 文本编码检测器 <span class="badge badge-accent2">sair.sacoms.CodeReader</span></h3>
+        <p>文本文件编码自动识别工具。构造时传入候选编码列表（如 <code>"GBK"</code>、<code>"UTF-8"</code> 等），调用 <code>detectCharsetForFile(path)</code> 逐个尝试用候选编码解码文件内容，返回第一个成功解码的编码名称。也支持通过 <code>detectCharsetForStream(InputStream)</code> 直接对输入流进行检测。底层原理：遍历读取字节缓冲区，用 <code>CharsetDecoder</code> 解码，若抛出 <code>CharacterCodingException</code> 则说明编码不匹配。</p>
+    </div>
+
+    <div id="tables" class="card ani-fade-in-up">
+        <h3>📋 Tables — 系统剪贴板工具 <span class="badge badge-warn">sair.sacoms.Tables</span></h3>
+        <p><b>系统剪贴板读写工具</b>（并非"表格数据"）。基于 <code>java.awt.Toolkit</code> 和 <code>Transferable</code> 接口，提供四个静态方法：</p>
+        <ul>
+            <li><code>getSysClipboardText()</code> — 读取剪贴板中的文本内容</li>
+            <li><code>setSysClipboardText(String)</code> — 将字符串写入剪贴板</li>
+            <li><code>getImageFromClipboard()</code> — 从剪贴板获取图片（<code>Image</code> 类型）</li>
+            <li><code>setClipboardImage(Image)</code> — 将图片写入剪贴板</li>
+        </ul>
+    </div>
+
+    <div class="card ani-fade-in-up">
+        <h3>🎵 Aplayer — MP3 音频播放器 <span class="badge badge-accent">sair.sacoms.Aplayer</span></h3>
+        <p>基于 <b>JLayer</b>（<code>javazoom.jl.player.Player</code>）的标准 MP3 文件播放器，<b>不是 JavaFX</b>。实现了 <code>Runnable</code> 接口，可以在新线程中播放 MP3 文件。支持多种初始化方式：文件路径字符串、<code>File</code> 对象、<code>Urler</code> 对象或 <code>InputStream</code> 流。提供 <code>toStop()</code> 停止播放、<code>isEnd()</code> 判断播放是否已结束。</p>
+    </div>
+
+    <div class="card ani-fade-in-up">
+        <h3>🎤 KRC — 酷狗歌词解密解析 <span class="badge badge-accent2">sair.sacoms.KRC</span></h3>
+        <p>酷狗音乐 <b>KRC 逐字歌词文件</b>的解密与解析工具。KRC 文件经过 <b>XOR 异或加密 + zlib 压缩</b>处理，该工具内部流程为：① 用 <code>SFS.miarry</code> 密钥数组逐字节异或解密；② 使用 <code>Inflater</code> 解压缩；③ 将解密后的文本按行解析，分离出元信息头（<code>getInfoTi()</code>）和逐字歌词正文（<code>getLrcBody()</code>）。还提供 <code>getHead_Time()</code> 提取一行中的时间标记，<code>get_Chars_Time()</code> 提取逐字时间与字符的对应关系。</p>
+    </div>
+
+    <div class="card ani-fade-in-up">
+        <h3>🎶 LRC — 标准歌词解析 <span class="badge badge-warn">sair.sacoms.LRC</span></h3>
+        <p>标准 <b>LRC 歌词文件</b>解析器。读取 LRC 文件后自动提取元数据：<code>title</code>（歌曲标题，ti标签）、<code>artist</code>（艺术家，ar标签）、<code>album</code>（专辑，al标签）、<code>lrcMaker</code>（制作者，by标签）。同时解析每行中的时间标签（格式 <code>[mm:ss.xx]</code>）与歌词文本的对应关系，输出 <code>List&lt;LrcLine&gt;</code> 并按时间升序排列。</p>
+    </div>
+
+    <div class="card ani-fade-in-up">
+        <h3>🔀 Seq — 快速排序器 <span class="badge badge-accent">sair.sacoms.Seq</span></h3>
+        <p><b>基于快速排序算法的排序工具</b>（并非"序列生成"）。支持对 <code>Integer[]</code> 数组、实现了 <code>SeqPageI</code> 接口的对象数组、以及 <code>SairLists&lt;T&gt;</code> 列表进行原地排序。通过 <code>Key</code> 机制选择排序方向：</p>
+        <ul>
+            <li><code>Seq.BySort</code> — <b>升序</b>排列（从小到大）</li>
+            <li><code>Seq.ByOrder</code> — <b>降序</b>排列（从大到小）</li>
+        </ul>
+        <p>自定义对象需实现 <code>SeqPageI</code> 接口的 <code>getSeqID()</code> 方法，返回排序依据的长整型 ID 值。排序完成后自动调用 <code>System.gc()</code> 回收临时内存。</p>
+        <pre><code><span class="cmt">// 排序示例</span>
+<span class="typ">Integer</span>[] arr = {<span class="num">3</span>, <span class="num">1</span>, <span class="num">4</span>, <span class="num">2</span>};
+<span class="typ">Seq</span>.<span class="fn">Of</span>(<span class="typ">Seq</span>.BySort, arr);  <span class="cmt">// → [1, 2, 3, 4]</span>
+<span class="typ">Seq</span>.<span class="fn">Of</span>(<span class="typ">Seq</span>.ByOrder, arr); <span class="cmt">// → [4, 3, 2, 1]</span></code></pre>
+    </div>
+
+    <div class="card ani-fade-in-up">
+        <h3>💾 Objserialize — 对象序列化工具 <span class="badge badge-accent2">sair.sacoms.Objserialize</span></h3>
+        <p>基于 <b>JDK 原生序列化</b>（<code>ObjectOutputStream</code> / <code>ObjectInputStream</code>）的对象持久化工具。使用方法：</p>
+        <ul>
+            <li><code>toSerial(T obj, String url)</code> — 将实现了 <code>Serializable</code> 接口的对象序列化到指定路径；若目录不存在则自动创建</li>
+            <li><code>unSerial(String url)</code> — 从文件中反序列化还原对象，返回泛型类型，使用时需<b>强制类型转换</b>；若文件不存在返回 null</li>
+        </ul>
+    </div>
+
+    <div class="card ani-fade-in-up">
+        <h3>🀄 PY — 汉语拼音转换工具 <span class="badge badge-warn">sair.sacoms.PY</span></h3>
+        <p><b>汉语拼音与汉字互转工具</b>（PY = <b>拼</b>音，并非 Python）。内置拼音-汉字对照字典（数据来源 <code>/sair/res/PY_CH.txt</code>），提供以下能力：</p>
+        <ul>
+            <li><code>PYgetCH(String py)</code> — 根据拼音返回该读音对应的<b>所有汉字</b>（char[]）</li>
+            <li><code>CHgetPY(Character ch)</code> — 根据汉字返回其<b>所有可能的拼音</b>（String[]），含多音字支持</li>
+            <li><code>getPtS()</code> / <code>getStP()</code> — 获取完整的拼音→汉字 / 汉字→拼音映射表</li>
+        </ul>
+        <p>支持通过构造参数传入自定义码表，覆盖默认字典。</p>
+    </div>
+
+    <div class="card ani-fade-in-up">
+        <h3>🔐 Key&lt;T&gt; — 类型安全键 <span class="badge badge-accent">sair.sacoms.Key&lt;T&gt;</span></h3>
+        <p>泛型化的<b>类型安全键值封装</b>。在 SaComS 中被广泛用于替代字符串常量进行模式选择（如 Seq 中的 BySort/ByOrder、CMD 中的各种命令模式等）。</p>
+        <ul>
+            <li><code>Key.creatKey(T abs)</code> — 创建绑定具体值的键</li>
+            <li><code>Key.creatKey()</code> — 创建空键（值为 null）</li>
+            <li><code>about()</code> — 获取键绑定的值</li>
+        </ul>
+        <p>因为每个 Key 实例是唯一的对象引用，使用 <code>equals()</code> 比较时比字符串更安全，避免了魔法字符串带来的拼写错误风险。</p>
+        <pre><code><span class="cmt">// Key 的基本用法</span>
+<span class="typ">Key</span>&lt;<span class="typ">String</span>&gt; myKey = <span class="typ">Key</span>.<span class="fn">creatKey</span>(<span class="str">"value"</span>);
+<span class="typ">String</span> value = myKey.<span class="fn">about</span>();  <span class="cmt">// → "value"</span></code></pre>
+    </div>
+
+    <div class="card ani-fade-in-up">
+        <h3>🔍 匹配器系列 — 括号匹配与代码行分析</h3>
+
+        <h4>SairBracketMatcher — 括号匹配分割器 <span class="badge badge-accent2" style="font-size:0.75em;">sair.sacoms.SairBracketMatcher</span></h4>
+        <p>根据自定义括号规则对字符串进行<b>括号配对验证与层级分割</b>。构造时指定括号规则（如 <code>{"()", "[]", "{}"}</code>）和转义字符（<code>capChar</code>，如 <code>'%'</code>）。核心方法：</p>
+        <ul>
+            <li><code>chkSplit()</code> — 验证所有括号是否完全匹配配对</li>
+            <li><code>split()</code> — 按括号层级将内容分割为字符串数组，从最内层括号内容到最外层</li>
+        </ul>
+        <p>支持运行时通过 <code>reSetString()</code> / <code>reSetRule()</code> 动态切换匹配目标和规则。</p>
+
+        <h4>SairLineMatcher — 代码行结构分析器 <span class="badge badge-warn" style="font-size:0.75em;">sair.sacoms.SairLineMatcher</span></h4>
+        <p>基于 SairBracketMatcher 的分割结果，进一步对<b>单个代码行进行语义分析</b>。核心方法 <code>getSuperFuncName(index, escapeChar, outRule)</code>：提取括号前的方法名或变量名（例如分析 <code>foo(arg1, arg2)</code> 时，返回 <code>"foo"</code>）。</p>
+
+        <h4>SairMatcherStatic — 内部辅助类 <span class="badge badge-accent" style="font-size:0.75em;">sair.sacoms.SairMatcherStatic</span></h4>
+        <p>包级私有工具类，为上述匹配器提供静态帮助方法：字符在括号规则数组中的查找（<code>chk()</code>）、<code>CharPage</code> 内部类用于记录每个括号对的起止位置。</p>
+    </div>
+
+    <div class="card ani-fade-in-up">
+        <h3>📦 Txtkey — 文本文件序列化打包 <span class="badge badge-accent">sair.sacoms.Txtkey</span></h3>
+        <p>将文本文件内容读入内存并通过 <code>Objserialize</code> 序列化为<b>二进制文件</b>的工具（并非"键值对解析"）。两个核心静态方法：</p>
+        <ul>
+            <li><code>fxTxt(String inUrl, String outUrl, Key&lt;String&gt; enc)</code> — 将指定编码的文本文件读取为字符串数组，然后序列化保存为二进制文件</li>
+            <li><code>reTxt(String inUrl, String outUrl)</code> — 反向操作，将序列化后的二进制文件还原为原始文本文件</li>
+        </ul>
+        <p>这本质上是一个<b>文本→序列化格式的打包/解包工具</b>，可用于文本数据的加密存储或减少体积。</p>
+    </div>
+
+    <div class="card ani-fade-in-up">
+        <h3>🔢 StringNumber — 字符串字符统计 <span class="badge badge-accent2">sair.sacoms.StringNumber</span></h3>
+        <p>接收一个 <code>Collection&lt;String&gt;</code>，自动<b>去除所有标点符号和空白字符</b>后统计剩余有效字符的总长度。核心方法：</p>
+        <ul>
+            <li><code>getLen()</code> — 返回所有字符串去除标点和空白后的<b>总字符数</b></li>
+            <li><code>getStrs()</code> — 返回经过清理后的字符串列表</li>
+        </ul>
+        <p>适合用于统计文本的有效内容长度、过滤噪声等场景。</p>
+    </div>
+
+    <div class="card ani-fade-in-up">
+        <h3>✂️ SplitsJMD — IR 命令语法解析器 <span class="badge badge-warn">sair.sacoms.SplitsJMD</span></h3>
+        <p><b>SairFramework 核心命令解析器</b>，将类似 <code>"/命令名 参数1 参数2 ..."</code> 格式的 IR 命令字符串拆解为三个组成部分：</p>
+        <ul>
+            <li><code>getHead()</code> — 命令头（第一个 <code>/</code> 之前的内容，通常为调用者标识）</li>
+            <li><code>getEnd()</code> — 命令名称（<code>/</code> 之后、空格之前的部分）</li>
+            <li><code>getOtherRuns()</code> — 参数数组（空格分隔的后续参数）</li>
+        </ul>
+        <p>实现了 <code>ObjectBySplits</code> 接口。还提供 <code>ReturnOtherRunsToJMD()</code> 将参数数组反向拼接为命令字符串（可跳过指定下标），以及 <code>isNullEndAndNullArgs()</code> 判断空命令名+空参数的情况。</p>
+        <pre><code><span class="cmt">// 解析示例："Caller /doSomething arg1 arg2"</span>
+<span class="typ">SplitsJMD</span> spl = <span class="typ">SplitsJMD</span>.<span class="fn">split</span>(<span class="str">"Caller /doSomething arg1 arg2"</span>);
+spl.<span class="fn">getHead</span>();       <span class="cmt">// → "Caller"</span>
+spl.<span class="fn">getEnd</span>();        <span class="cmt">// → "doSomething"</span>
+spl.<span class="fn">getOtherRuns</span>();  <span class="cmt">// → ["arg1", "arg2"]</span></code></pre>
+    </div>
+
+    <hr class="gradient-divider">
+
+    <p style="text-align:center;color:var(--text-muted);font-size:0.85rem;">
+        下一步：了解 <a class="internal" href="ir-advanced.html" target="_self">IR 脚本与高级主题</a>
+    </p>
+
+</div>
+<button class="back-to-top" onclick="window.scrollTo({top:0,behavior:'smooth'})" title="回到顶部">↑</button>
+<script>
+    const btn = document.querySelector('.back-to-top');
+    window.addEventListener('scroll', () => {
+        btn.classList.toggle('visible', window.scrollY > 400);
+    });
+</script>
+</body>
+</html>

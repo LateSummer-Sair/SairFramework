@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SairFramework - 技术开发文档</title>
+    <link rel="stylesheet" href="css/style.css">
+    <style>
+        .sidebar { user-select: none; }
+        .nav-item[data-page] { cursor: pointer; }
+        .nav-item.collapsible::after {
+            content: '▾';
+            margin-left: auto;
+            font-size: 0.7rem;
+            transition: transform 0.3s;
+        }
+        .nav-item.collapsible.collapsed::after {
+            transform: rotate(-90deg);
+        }
+        .nav-sub.collapsed { display: none; }
+        .loading-screen {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            gap: 20px;
+        }
+        .loading-spinner {
+            width: 48px;
+            height: 48px;
+            border: 3px solid var(--border-color);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .loading-text {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+    <!-- 移动端菜单按钮 -->
+    <button class="mobile-menu-btn" onclick="toggleSidebar()" title="菜单">☰</button>
+    <div class="sidebar-overlay" onclick="toggleSidebar()"></div>
+
+    <!-- 主布局 -->
+    <div class="main-layout">
+        <!-- 侧边栏导航 -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="sidebar-logo">SairFramework</div>
+                <div class="sidebar-subtitle">技术开发文档 v5.3</div>
+            </div>
+
+            <nav class="sidebar-nav">
+                <!-- 入门指南 -->
+                <div class="nav-section">
+                    <div class="nav-section-title">入门指南</div>
+                    <a class="nav-item active" data-page="pages/overview.html" onclick="loadPage(this)">
+                        <span class="nav-icon">🏠</span> 框架概述
+                    </a>
+                    <a class="nav-item" data-page="pages/quickstart.html" onclick="loadPage(this)">
+                        <span class="nav-icon">🚀</span> 快速开始
+                    </a>
+                </div>
+
+                <!-- 插件开发 -->
+                <div class="nav-section">
+                    <div class="nav-section-title">插件开发</div>
+                    <a class="nav-item" data-page="pages/plugin-dev.html" onclick="loadPage(this)">
+                        <span class="nav-icon">🔌</span> 插件开发指南
+                    </a>
+                </div>
+
+                <!-- API 参考 -->
+                <div class="nav-section">
+                    <div class="nav-section-title">API 参考</div>
+                    <a class="nav-item" data-page="pages/api.html" onclick="loadPage(this)">
+                        <span class="nav-icon">📚</span> 框架核心API
+                    </a>
+                    <a class="nav-item" data-page="pages/sacoms.html" onclick="loadPage(this)">
+                        <span class="nav-icon">🧰</span> SaComS 工具包
+                    </a>
+                </div>
+
+                <!-- 高级主题 -->
+                <div class="nav-section">
+                    <div class="nav-section-title">高级主题</div>
+                    <a class="nav-item" data-page="pages/ir-advanced.html" onclick="loadPage(this)">
+                        <span class="nav-icon">📜</span> IR脚本与高级主题
+                    </a>
+                </div>
+
+                <!-- 寄语 -->
+                <div class="nav-section">
+                    <div class="nav-section-title">寄语</div>
+                    <a class="nav-item" href="pages/poem.html" target="_top">
+                        <span class="nav-icon">🌧️</span> 夏末雨停之时
+                    </a>
+                </div>
+            </nav>
+
+            <div class="sidebar-footer">
+                © SairFramework Project<br>
+                <span style="color:var(--accent)">Java 8+ · 跨平台</span>
+            </div>
+        </aside>
+
+        <!-- 内容区域 -->
+        <main class="content-area">
+            <div class="loading-screen" id="loadingScreen">
+                <div class="loading-spinner"></div>
+                <div class="loading-text">加载文档中...</div>
+            </div>
+            <iframe class="content-frame" id="contentFrame" src="pages/overview.html" 
+                    onload="hideLoading()" title="文档内容"></iframe>
+        </main>
+    </div>
+
+    <script>
+        // 隐藏加载动画
+        function hideLoading() {
+            document.getElementById('loadingScreen').style.display = 'none';
+        }
+
+        // 加载页面
+        function loadPage(el) {
+            const frame = document.getElementById('contentFrame');
+            const loading = document.getElementById('loadingScreen');
+            loading.style.display = 'flex';
+            frame.src = el.getAttribute('data-page');
+
+            // 更新活跃状态
+            document.querySelectorAll('.nav-item.active').forEach(item => item.classList.remove('active'));
+            el.classList.add('active');
+
+            // 移动端关闭侧栏
+            if (window.innerWidth <= 768) {
+                toggleSidebar();
+            }
+        }
+
+        // 切换侧栏
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            const overlay = document.querySelector('.sidebar-overlay');
+            sidebar.classList.toggle('open');
+            overlay.classList.toggle('show');
+        }
+
+        // ESC关闭侧栏
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                const sidebar = document.getElementById('sidebar');
+                if (sidebar.classList.contains('open')) toggleSidebar();
+            }
+        });
+
+        // 窗口大小变化时处理
+        window.addEventListener('resize', function() {
+            if (window.innerWidth > 768) {
+                document.getElementById('sidebar').classList.remove('open');
+                document.querySelector('.sidebar-overlay').classList.remove('show');
+            }
+        });
+
+        // iframe 内页面点击链接时通知父页面更新侧栏
+        window.addEventListener('message', function(e) {
+            if (e.data && e.data.type === 'nav') {
+                const page = e.data.page;
+                document.querySelectorAll('.nav-item[data-page]').forEach(item => {
+                    item.classList.remove('active');
+                    if (item.getAttribute('data-page') === page) {
+                        item.classList.add('active');
+                    }
+                });
+            }
+        });
+    </script>
+</body>
+</html>

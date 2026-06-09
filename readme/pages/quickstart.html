@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>快速开始 - SairFramework</title>
+    <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+<div class="doc-container" id="top">
+
+    <div class="doc-header ani-fade-in-up">
+        <h1 class="doc-title">快速开始</h1>
+        <p class="doc-subtitle">从零开始搭建开发环境，创建你的第一个 SairFramework 插件。</p>
+    </div>
+
+    <h2 class="ani-fade-in-up ani-delay-1">📋 前置要求</h2>
+    <div class="card ani-fade-in-up ani-delay-2">
+        <ul>
+            <li><strong>JDK 8 或更高版本</strong>（推荐 JDK 8，热卸载支持最好）</li>
+            <li>任意 Java IDE（Eclipse、IntelliJ IDEA 等）</li>
+            <li>下载 SairFramework 完整目录（包含 <code>SFW.jar</code> 和 <code>plugins/</code> 目录）</li>
+        </ul>
+    </div>
+
+    <h2 class="ani-fade-in-up ani-delay-1">🚀 第一步：创建插件项目</h2>
+
+    <div class="card ani-fade-in-up ani-delay-2">
+        <div class="card-title"><span class="card-icon">📁</span> 项目结构</div>
+        <p>创建一个标准 Java 项目，以下面的结构为例：</p>
+        <pre><code><span class="cmt">MyPlugin/                          # 你的插件项目根目录</span>
+├── <span class="typ">src/</span>
+│   └── <span class="typ">sair/</span>
+│       └── <span class="typ">myplugin/</span>
+│           └── <span class="typ">MyActivity.java</span>      <span class="cmt"># 插件主类</span>
+└── <span class="typ">META-INF/</span>
+    └── <span class="typ">MANIFEST.MF</span>              <span class="cmt"># 插件描述文件（必须！）</span></code></pre>
+    </div>
+
+    <h2 class="ani-fade-in-up ani-delay-1">✏️ 第二步：编写 MANIFEST.MF</h2>
+
+    <div class="card ani-fade-in-up ani-delay-2">
+        <div class="card-title"><span class="card-icon">📝</span> MANIFEST.MF 文件</div>
+        <p>在 <code>META-INF/MANIFEST.MF</code> 中声明插件的入口 Activity 类：</p>
+        <pre><code><span class="cmt">Manifest-Version: 1.0</span>
+<span class="kw">ACT</span>: <span class="typ">sair.myplugin.MyActivity</span>;</code></pre>
+
+        <div class="info-box tip">
+            <div class="info-box-title">💡 多个 Activity</div>
+            <p>一个 JAR 可以包含多个 Activity，用分号分隔：</p>
+            <pre><code><span class="cmt">Manifest-Version: 1.0</span>
+<span class="kw">ACT</span>: <span class="typ">sair.myplugin.MainActivity</span>;<span class="typ">sair.myplugin.SubActivity</span>;</code></pre>
+        </div>
+
+        <div class="info-box warn">
+            <div class="info-box-title">⚠️ 注意</div>
+            <p><code>ACT</code> 的值末尾<strong>必须有分号</strong>（<code>;</code>）！这是框架解析的标识。</p>
+        </div>
+    </div>
+
+    <h2 class="ani-fade-in-up ani-delay-1">💻 第三步：编写 Activity 类</h2>
+
+    <div class="card ani-fade-in-up ani-delay-2">
+        <div class="card-title"><span class="card-icon">📄</span> MyActivity.java</div>
+        <p>所有插件的主类必须继承抽象类 <code>sair.user.Activity</code>：</p>
+        <pre><code><span class="kw">package</span> <span class="typ">sair.myplugin</span>;
+
+<span class="kw">import</span> <span class="typ">sair.user.Activity</span>;
+<span class="kw">import</span> <span class="typ">sair.sys.SairCons</span>;
+<span class="kw">import</span> <span class="typ">sair.FCM</span>;
+<span class="kw">import</span> <span class="typ">sair.Pathes</span>;
+
+<span class="kw">public class</span> <span class="typ">MyActivity</span> <span class="kw">extends</span> <span class="typ">Activity</span> {
+
+    <span class="cmt">// ① 核心方法：处理用户命令</span>
+    <span class="ann">@Override</span>
+    <span class="kw">public</span> <span class="typ">Object</span> <span class="fn">main</span>(<span class="typ">String</span> funcName, <span class="typ">String</span> args) {
+        <span class="kw">switch</span> (funcName) {
+            <span class="kw">case</span> <span class="str">"hello"</span>:
+                <span class="typ">SairCons</span>.<span class="fn">println</span>(<span class="str">"Hello, SairFramework!"</span>);
+                <span class="kw">return true</span>;
+            <span class="kw">case</span> <span class="str">"greet"</span>:
+                <span class="typ">SairCons</span>.<span class="fn">println</span>(<span class="str">"你好, "</span> + args + <span class="str">"!"</span>);
+                <span class="kw">return true</span>;
+        }
+        <span class="kw">return false</span>; <span class="cmt">// 返回 false 会自动打印 help 信息</span>
+    }
+
+    <span class="cmt">// ② 帮助信息</span>
+    <span class="ann">@Override</span>
+    <span class="kw">public</span> <span class="typ">String</span>[] <span class="fn">help</span>() {
+        <span class="typ">String</span> name = <span class="kw">this</span>.<span class="fn">getName</span>();
+        <span class="kw">return new</span> <span class="typ">String</span>[] {
+            <span class="typ">Pathes</span>.printSplit,
+            <span class="str">"MyPlugin v1.0 - 我的第一个插件"</span>,
+            <span class="typ">Pathes</span>.printSplit,
+            name + <span class="str">"/hello : 输出 Hello World"</span>,
+            name + <span class="str">"/greet [名字] : 向指定名字打招呼"</span>,
+        };
+    }
+
+    <span class="cmt">// ③ 退出时清理资源</span>
+    <span class="ann">@Override</span>
+    <span class="kw">public void</span> <span class="fn">exit</span>() {
+        <span class="typ">SairCons</span>.<span class="fn">println</span>(<span class="str">"MyPlugin 已退出"</span>);
+    }
+
+    <span class="cmt">// ④ 可选：指定数据目录（不重写则默认为类全名）</span>
+    <span class="ann">@Override</span>
+    <span class="kw">protected</span> <span class="typ">String</span> <span class="fn">dataDir</span>() {
+        <span class="kw">return</span> <span class="str">"myplugin"</span>; <span class="cmt">// 数据存放在 data/myplugin/</span>
+    }
+}</code></pre>
+    </div>
+
+    <h2 class="ani-fade-in-up ani-delay-1">📦 第四步：打包与部署</h2>
+
+    <div class="card ani-fade-in-up ani-delay-2">
+        <div class="card-title"><span class="card-icon">🏗️</span> 打包要求</div>
+        <ol class="step-list">
+            <li><strong>导出普通 JAR</strong> — 在 IDE 中将项目导出为<strong>普通 JAR 文件</strong>（不是可执行 JAR）</li>
+            <li><strong>仅打包自己的代码</strong> — 不需要将 SFW.jar 或 SaComS.jar 一起打包</li>
+            <li><strong>确认 MANIFEST.MF</strong> — 打包后检查 JAR 内的 META-INF/MANIFEST.MF 是否包含 <code>ACT</code> 声明</li>
+            <li><strong>放入 plugins/exection/</strong> — 将生成的 JAR 文件放入 <code>plugins/exection/</code> 目录</li>
+        </ol>
+    </div>
+
+    <h2 class="ani-fade-in-up ani-delay-1">▶️ 第五步：运行测试</h2>
+
+    <div class="card ani-fade-in-up ani-delay-2">
+        <div class="card-title"><span class="card-icon">🖥️</span> 运行 SFW</div>
+        <p>打开命令行，在 SairFramework 目录下执行：</p>
+        <pre><code>java -jar SFW.jar</code></pre>
+        <p>或者直接双击 <code>run.bat</code>（Windows）。</p>
+        <p>启动后在控制台输入以下命令测试：</p>
+        <pre><code><span class="cmt"># 查看已加载的插件（注意插件名是 JAR 文件名）</span>
+/list
+
+<span class="cmt"># 假设 JAR 文件名为 myplugin.jar</span>
+myplugin/hello
+myplugin/greet 世界
+
+<span class="cmt"># 查看插件帮助</span>
+myplugin/help
+
+<span class="cmt"># 查看插件信息</span>
+myplugin/info</code></pre>
+    </div>
+
+    <h2 class="ani-fade-in-up ani-delay-1">🔧 调试技巧</h2>
+
+    <div class="card ani-fade-in-up ani-delay-2">
+        <div class="card-title"><span class="card-icon">🐛</span> 在 IDE 中调试插件</div>
+        <p>在插件类中添加 <code>main</code> 方法进行调试，无需启动完整 SFW：</p>
+        <pre><code><span class="kw">public static void</span> <span class="fn">main</span>(<span class="typ">String</span>[] args) <span class="kw">throws</span> <span class="typ">Exception</span> {
+    <span class="cmt">// 创建自己的 Activity 实例</span>
+    <span class="typ">Activity</span> myacti = <span class="kw">new</span> <span class="typ">MyActivity</span>();
+
+    <span class="cmt">// 方式一：使用 Main.toTest 进行指令测试</span>
+    <span class="typ">Main</span>.<span class="fn">toTest</span>(myacti, <span class="str">"hello"</span>, <span class="str">""</span>);
+    <span class="typ">Main</span>.<span class="fn">toTest</span>(myacti, <span class="str">"greet"</span>, <span class="str">"Sair"</span>);
+}</code></pre>
+
+        <div class="info-box tip">
+            <div class="info-box-title">💡 方式二：注册到 Libraries</div>
+            <p>更完整的调试方式，可以测试多组件协同：</p>
+            <pre><code><span class="kw">public static void</span> <span class="fn">main</span>(<span class="typ">String</span>[] args) <span class="kw">throws</span> <span class="typ">Exception</span> {
+    <span class="typ">Activity</span> myacti = <span class="kw">new</span> <span class="typ">MyActivity</span>();
+    myacti.<span class="fn">setName</span>(<span class="str">"test"</span>);
+    <span class="typ">Libraries</span>.activities.<span class="fn">put</span>(<span class="str">"test"</span>, myacti);
+
+    <span class="cmt">// 加载依赖组件</span>
+    <span class="typ">Main</span>.<span class="fn">toTest</span>(myacti, <span class="str">""</span>, <span class="str">""</span>);
+
+    <span class="cmt">// 使用 runner 调用（可调用其他组件）</span>
+    <span class="typ">SairCons</span>.<span class="fn">runner</span>(<span class="kw">false</span>, <span class="str">"test/hello"</span>);
+    <span class="typ">SairCons</span>.<span class="fn">runner</span>(<span class="kw">false</span>, <span class="str">"test/greet Sair"</span>);
+}</code></pre>
+        </div>
+    </div>
+
+    <hr class="gradient-divider">
+
+    <p style="text-align:center;color:var(--text-muted);font-size:0.85rem;">
+        下一步：深入学习 <a class="internal" href="plugin-dev.html" target="_self">插件开发指南</a>
+    </p>
+
+</div>
+<button class="back-to-top" onclick="window.scrollTo({top:0,behavior:'smooth'})" title="回到顶部">↑</button>
+<script>
+    const btn = document.querySelector('.back-to-top');
+    window.addEventListener('scroll', () => {
+        btn.classList.toggle('visible', window.scrollY > 400);
+    });
+</script>
+</body>
+</html>

@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>框架核心API - SairFramework</title>
+    <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+<div class="doc-container" id="top">
+
+    <div class="doc-header ani-fade-in-up">
+        <h1 class="doc-title">框架核心 API 参考</h1>
+        <p class="doc-subtitle">SairFramework 核心类的完整 API 说明，插件开发者需要了解的关键接口。</p>
+    </div>
+
+    <!-- Main -->
+    <h2 class="ani-fade-in-up ani-delay-1">Main 类 <span class="badge badge-accent">sair.Main</span></h2>
+    <div class="card ani-fade-in-up ani-delay-2">
+        <p>框架的入口类，负责启动流程和插件测试。</p>
+        <table class="doc-table">
+            <thead><tr><th>成员</th><th>类型</th><th>说明</th></tr></thead>
+            <tbody>
+                <tr><td><code>Version</code></td><td><code>static String</code></td><td>当前框架版本号（如 "0.5.3"）</td></tr>
+                <tr><td><code>toTest(Activity, String, String)</code></td><td><code>static Object</code></td><td>调试用：加载框架并测试指定 Activity 的指定功能</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Activity -->
+    <h2 class="ani-fade-in-up ani-delay-1">Activity 抽象类 <span class="badge badge-danger">sair.user.Activity</span></h2>
+    <div class="card ani-fade-in-up ani-delay-2">
+        <p>所有插件的基类，开发者必须继承此类。</p>
+        <table class="doc-table">
+            <thead><tr><th>方法</th><th>说明</th></tr></thead>
+            <tbody>
+                <tr><td><code>main(String funcName, String args)</code></td><td><strong>抽象方法</strong>，处理命令的主入口</td></tr>
+                <tr><td><code>help()</code></td><td><strong>抽象方法</strong>，返回帮助字符串数组</td></tr>
+                <tr><td><code>exit()</code></td><td><strong>抽象方法</strong>，插件卸载时调用</td></tr>
+                <tr><td><code>dataDir()</code></td><td>可重写，返回自定义数据目录名，默认返回 <code>null</code>（使用类全名）</td></tr>
+                <tr><td><code>o_funcMain(Object o)</code></td><td>可重写，处理 ofunc 命令的返回值，默认打印错误信息</td></tr>
+                <tr><td><code>getDataDir()</code></td><td>获取数据目录的完整路径，自动创建目录</td></tr>
+                <tr><td><code>getName()</code></td><td>获取插件名称</td></tr>
+                <tr><td><code>setName(String)</code></td><td>设置插件名称（名称不能重复）</td></tr>
+                <tr><td><code>isOpen()</code></td><td>检查插件是否处于打开状态</td></tr>
+                <tr><td><code>close()</code></td><td>关闭插件命令接收</td></tr>
+                <tr><td><code>open()</code></td><td>打开插件命令接收</td></tr>
+                <tr><td><code>putOrderName(newName, funcName)</code></td><td>创建命令别名</td></tr>
+                <tr><td><code>getOldOrderName(newName)</code></td><td>获取别名对应的原始命令名</td></tr>
+                <tr><td><code>removeOrderName(name)</code></td><td>删除命令别名</td></tr>
+                <tr><td><code>containsOrderName(name)</code></td><td>检查是否存在指定别名</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- SairCons -->
+    <h2 class="ani-fade-in-up ani-delay-1">SairCons 类 <span class="badge badge-accent2">sair.sys.SairCons</span></h2>
+    <div class="card ani-fade-in-up ani-delay-2">
+        <p>控制台操作核心类，提供打印输出、命令执行等功能。</p>
+        <table class="doc-table">
+            <thead><tr><th>方法</th><th>说明</th></tr></thead>
+            <tbody>
+                <tr><td><code>print(String info)</code></td><td>使用默认颜色打印文本</td></tr>
+                <tr><td><code>print(Color c, String info)</code></td><td>使用指定颜色打印文本</td></tr>
+                <tr><td><code>println(String info)</code></td><td>使用默认颜色打印文本并换行</td></tr>
+                <tr><td><code>println(Color c, String info)</code></td><td>使用指定颜色打印文本并换行</td></tr>
+                <tr><td><code>clear()</code></td><td>清空控制台内容</td></tr>
+                <tr><td><code>getConsoleText()</code></td><td>获取控制台所有文本</td></tr>
+                <tr><td><code>getConsoleSize()</code></td><td>获取控制台内容大小</td></tr>
+                <tr><td><code>dePrint(Integer offs, Integer len)</code></td><td>删除指定范围的内容</td></tr>
+                <tr><td><code>insertPrinto(Integer index, Color c, String info)</code></td><td>在指定位置插入文本（考虑代理模式）</td></tr>
+                <tr><td><code>runner(boolean isMark, String cmd)</code></td><td>执行命令字符串（isMark=true 则记录历史）</td></tr>
+                <tr><td><code>toActiRun(Activity, String funcName, String args)</code></td><td>直接调用 Activity 的 main 方法</td></tr>
+                <tr><td><code>getDefaultColor()</code></td><td>获取默认字体颜色</td></tr>
+                <tr><td><code>setDefaultColor(Color)</code></td><td>设置默认字体颜色</td></tr>
+                <tr><td><code>addPrintRunnable(String id, PrintRunnable)</code></td><td>添加打印代理（输出拦截器）</td></tr>
+                <tr><td><code>removePrintRunnable(String id)</code></td><td>移除打印代理</td></tr>
+                <tr><td><code>removeAllPrintRunnable()</code></td><td>移除所有打印代理</td></tr>
+                <tr><td><code>SpliterSpiManager</code></td><td><code>static SpliterSPI</code> — 当前活跃的命令解析器</td></tr>
+                <tr><td><code>localRunnerHistory</code></td><td><code>static ArrayList&lt;String&gt;</code> — 命令历史记录</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Libraries -->
+    <h2 class="ani-fade-in-up ani-delay-1">Libraries 类 <span class="badge badge-accent">sair.sys.Libraries</span></h2>
+    <div class="card ani-fade-in-up ani-delay-2">
+        <p>全局注册表，管理所有已加载的 Activity、Exection 和 Mod。</p>
+        <table class="doc-table">
+            <thead><tr><th>成员</th><th>类型</th><th>说明</th></tr></thead>
+            <tbody>
+                <tr><td><code>activities</code></td><td><code>HashMap&lt;String, Activity&gt;</code></td><td>按名称索引的所有 Activity</td></tr>
+                <tr><td><code>exections</code></td><td><code>HashMap&lt;Activity, Exection&gt;</code></td><td>Activity 到 Exection 的映射</td></tr>
+                <tr><td><code>mods</code></td><td><code>HashMap&lt;String, Mod&gt;</code></td><td>所有已加载的 Mod 库</td></tr>
+                <tr><td><code>setActivityName(String path)</code></td><td><code>static String</code></td><td>根据 JAR 路径生成唯一 Activity 名称</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- LoaderManager -->
+    <h2 class="ani-fade-in-up ani-delay-1">LoaderManager 类 <span class="badge badge-accent2">sair.LoaderManager</span></h2>
+    <div class="card ani-fade-in-up ani-delay-2">
+        <p>类加载管理器，负责加载 bootlib、modlib 和 exection 中的 JAR。</p>
+        <table class="doc-table">
+            <thead><tr><th>成员</th><th>说明</th></tr></thead>
+            <tbody>
+                <tr><td><code>systemLoader</code></td><td>系统 ClassLoader</td></tr>
+                <tr><td><code>loader</code></td><td>全局 SairLoader 实例（用于 modlib）</td></tr>
+                <tr><td><code>ExecLoaders</code></td><td><code>HashMap&lt;URL, SairLoader&gt;</code> — 每个插件的独立 ClassLoader 映射</td></tr>
+                <tr><td><code>loadExecJar(String)</code></td><td>加载一个插件 JAR 到独立 ExectionLoader</td></tr>
+                <tr><td><code>loadLibJar(String)</code></td><td>加载一个库 JAR 到全局 SairLoader</td></tr>
+                <tr><td><code>loadMain(String className, ClassLoader)</code></td><td>从指定 ClassLoader 加载并实例化 Activity</td></tr>
+                <tr><td><code>getModResStream(String)</code></td><td>从 modlib 的 JAR 中读取资源文件流</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- ToolPack -->
+    <h2 class="ani-fade-in-up ani-delay-1">ToolPack 类 <span class="badge badge-warn">sair.sys.tools.ToolPack</span></h2>
+    <div class="card ani-fade-in-up ani-delay-2">
+        <p>工具集，提供路径解析、MANIFEST 读取、命令分割等功能。</p>
+        <table class="doc-table">
+            <thead><tr><th>方法</th><th>说明</th></tr></thead>
+            <tbody>
+                <tr><td><code>getPath()</code></td><td>获取 SFW.jar 所在目录的绝对路径</td></tr>
+                <tr><td><code>getAllFilesPath(File, boolean)</code></td><td>递归获取目录下所有文件的路径列表</td></tr>
+                <tr><td><code>pathRepack(String)</code></td><td>解析带双引号的路径字符串，返回绝对路径数组</td></tr>
+                <tr><td><code>getExeMain(String)</code></td><td>读取 JAR 中 MANIFEST.MF 的 ACT 属性</td></tr>
+                <tr><td><code>getAttributes(String name, String path)</code></td><td>读取 JAR 中 MANIFEST.MF 的指定属性</td></tr>
+                <tr><td><code>findSplited(String cmd)</code></td><td>获取当前命令解析器解析命令</td></tr>
+                <tr><td><code>setSpliter(String className)</code></td><td>切换命令解析器</td></tr>
+                <tr><td><code>IntegerValOfString(String)</code></td><td>从字符串中提取数字</td></tr>
+                <tr><td><code>getVmap()</code></td><td>获取环境变量表 <code>HashMap&lt;String,String&gt;</code></td></tr>
+                <tr><td><code>reArg(String[], Integer[])</code></td><td>从参数数组中排除指定索引的元素后重组</td></tr>
+                <tr><td><code>chkArgsV(String)</code></td><td>替换参数中的 <code>%变量名%</code> 为实际值</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Pathes -->
+    <h2 class="ani-fade-in-up ani-delay-1">Pathes 类 <span class="badge badge-accent2">sair.Pathes</span></h2>
+    <div class="card ani-fade-in-up ani-delay-2">
+        <p>路径常量定义类。</p>
+        <table class="doc-table">
+            <thead><tr><th>成员</th><th>说明</th></tr></thead>
+            <tbody>
+                <tr><td><code>bootDir</code></td><td><code>plugins/bootlib/</code> 完整路径</td></tr>
+                <tr><td><code>modDir</code></td><td><code>plugins/modlib/</code> 完整路径</td></tr>
+                <tr><td><code>execDir</code></td><td><code>plugins/exection/</code> 完整路径</td></tr>
+                <tr><td><code>dataResDir</code></td><td><code>data/</code> 完整路径</td></tr>
+                <tr><td><code>printSplit</code></td><td>分割线字符串 "----------..."</td></tr>
+                <tr><td><code>logoPath</code></td><td>Logo 图片路径</td></tr>
+                <tr><td><code>fontPath</code></td><td>字体文件路径</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- FCM -->
+    <h2 class="ani-fade-in-up ani-delay-1">FCM 类 <span class="badge badge-accent">sair.FCM</span></h2>
+    <div class="card ani-fade-in-up ani-delay-2">
+        <p>框架颜色管理（Framework Color Manager），定义各场景的默认颜色。</p>
+        <table class="doc-table">
+            <thead><tr><th>成员</th><th>默认值</th><th>说明</th></tr></thead>
+            <tbody>
+                <tr><td><code>loadBoot_Color</code></td><td><code>BLACK</code></td><td>bootlib 加载日志颜色</td></tr>
+                <tr><td><code>loadExection_Color</code></td><td><code>ORANGE</code></td><td>exection 加载日志颜色</td></tr>
+                <tr><td><code>loadMod_Color</code></td><td><code>WHITE</code></td><td>modlib 加载日志颜色</td></tr>
+                <tr><td><code>EXECTION_pathInfo_Color</code></td><td><code>YELLOW</code></td><td>info 命令输出的路径信息颜色</td></tr>
+                <tr><td><code>EXECTION_help_Color</code></td><td><code>PINK</code></td><td>help 命令输出的帮助信息颜色</td></tr>
+                <tr><td><code>Error_Color</code></td><td><code>RED</code></td><td>错误信息颜色</td></tr>
+                <tr><td><code>split_Color</code></td><td><code>GREEN</code></td><td>分割线颜色</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Spliter -->
+    <h2 class="ani-fade-in-up ani-delay-1">Spliter 接口 <span class="badge badge-accent2">sair.sys.tools.Spliter</span></h2>
+    <div class="card ani-fade-in-up ani-delay-2">
+        <p>命令分割器接口。默认实现为 <code>SystemSpliter</code>。</p>
+        <table class="doc-table">
+            <thead><tr><th>方法</th><th>说明</th></tr></thead>
+            <tbody>
+                <tr><td><code>getExecName()</code></td><td>获取 Activity 名称（命令中 / 之前的部分）</td></tr>
+                <tr><td><code>getExecFunc()</code></td><td>获取功能名称（/ 之后、空格之前）</td></tr>
+                <tr><td><code>getArgs()</code></td><td>获取参数字符串（空格之后全部内容）</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- PrintRunnable -->
+    <h2 class="ani-fade-in-up ani-delay-1">PrintRunnable 接口 <span class="badge badge-accent">sair.user.PrintRunnable</span></h2>
+    <div class="card ani-fade-in-up ani-delay-2">
+        <p>打印代理接口。实现此接口可以拦截控制台输出。</p>
+        <pre><code><span class="kw">public interface</span> <span class="typ">PrintRunnable</span> {
+    <span class="kw">void</span> <span class="fn">run</span>(<span class="typ">Integer</span> index, <span class="typ">Color</span> c, <span class="typ">String</span> info);
+}</code></pre>
+        <p>注册方式：<code>SairCons.addPrintRunnable("myPrinter", myPrintRunnable);</code></p>
+    </div>
+
+    <hr class="gradient-divider">
+
+    <p style="text-align:center;color:var(--text-muted);font-size:0.85rem;">
+        下一步：探索 <a class="internal" href="sacoms.html" target="_self">SaComS 工具包</a>
+    </p>
+
+</div>
+<button class="back-to-top" onclick="window.scrollTo({top:0,behavior:'smooth'})" title="回到顶部">↑</button>
+<script>
+    const btn = document.querySelector('.back-to-top');
+    window.addEventListener('scroll', () => {
+        btn.classList.toggle('visible', window.scrollY > 400);
+    });
+</script>
+</body>
+</html>

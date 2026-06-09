@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>夏末雨停之时 - SairFramework</title>
+<style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html, body {
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #0a0a14;
+        font-family: "STKaiti", "KaiTi", "楷体", "SimSun", "STSong", "宋体", serif;
+        cursor: default;
+    }
+
+    canvas#bgCanvas {
+        position: fixed;
+        top: 0; left: 0;
+        width: 100%; height: 100%;
+        z-index: 0;
+    }
+
+    .poem-wrapper {
+        position: fixed;
+        top: 0; left: 0;
+        width: 100%; height: 100%;
+        z-index: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        pointer-events: none;
+    }
+
+    .poem-container {
+        pointer-events: auto;
+        text-align: center;
+        padding: 40px 30px;
+        max-width: 90vw;
+    }
+
+    .poem-title {
+        font-size: clamp(1.8rem, 3.5vw, 2.8rem);
+        font-weight: normal;
+        letter-spacing: 0.15em;
+        margin-bottom: 2rem;
+        color: rgba(240,220,200,0.95);
+        text-shadow: 0 0 30px rgba(255,255,255,0.2);
+    }
+
+    .poem-verse {
+        font-size: clamp(1rem, 1.8vw, 1.35rem);
+        line-height: 2.4;
+        letter-spacing: 0.08em;
+        white-space: pre-line;
+    }
+
+    /* 诗句缓慢浮动 */
+    @keyframes float {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-3px); }
+    }
+
+    /* 每个字符的独立 span：默认冷白，悬停范围变色，缓慢浮动 */
+    .pc {
+        display: inline-block;
+        color: rgba(210,200,190,0.85);
+        text-shadow: 0 0 8px rgba(255,255,255,0.1);
+        white-space: pre;
+        animation: float calc(4s + var(--ad, 0s)) ease-in-out infinite;
+        animation-delay: calc(var(--ad, 0s) * -1);
+    }
+
+    /* 换行占位 */
+    .pc-br {
+        display: block; height: 0; overflow: hidden;
+    }
+
+    .back-link {
+        position: fixed;
+        bottom: 32px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 2;
+        pointer-events: auto;
+        color: rgba(255,255,255,0.5);
+        text-decoration: none;
+        font-size: 0.9rem;
+        letter-spacing: 0.1em;
+        transition: all 0.4s;
+        padding: 8px 20px;
+        border: 1px solid rgba(255,255,255,0.2);
+        border-radius: 20px;
+        font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+    }
+
+    .back-link:hover {
+        color: rgba(255,255,255,0.9);
+        border-color: rgba(255,255,255,0.6);
+        text-shadow: 0 0 20px rgba(255,255,255,0.5);
+        box-shadow: 0 0 30px rgba(255,255,255,0.1);
+    }
+</style>
+</head>
+<body>
+
+<canvas id="bgCanvas"></canvas>
+
+<div class="poem-wrapper">
+    <div class="poem-container" id="poemContainer">
+        <h1 class="poem-title">夏末雨停之时</h1>
+        <div class="poem-verse" id="poemBody"></div>
+    </div>
+</div>
+
+<a class="back-link" href="../index.html">← 回到文档</a>
+
+<script>
+(function() {
+    const canvas = document.getElementById('bgCanvas');
+    const ctx = canvas.getContext('2d');
+    const poemBody = document.getElementById('poemBody');
+
+    /* ===== 逐字 span 构建 ===== */
+    const POEM_TEXT =
+`月下相逢雨未停，霓虹倒影乱心庭。
+春风独伴河边走，辜负繁花满眼青。
+恨晚相识情乍起，别后方觉花正馨。
+君心已远难再回，独对寒江雨无声。
+
+初闻柔声似佳人，清风拂柳举星尘。
+憔悴沧桑情何意，心如刀绞落伤痕。
+身入洪荒心死时，忽来春风抚心尖。
+君若不弃我不离，此生不换此次情。
+沧海桑田皆可逝，唯留此愿刻心碑。
+纵使天地崩塌日，亦化云烟随君飞。
+莫问前尘多少泪，只言往后尽朝晖。
+此生既已许君意，三生石上再续归。`;
+
+    let charSpans = [];
+
+    function buildCharSpans() {
+        poemBody.innerHTML = '';
+        charSpans = [];
+        let frag = document.createDocumentFragment();
+        for (let i = 0; i < POEM_TEXT.length; i++) {
+            let ch = POEM_TEXT[i];
+            if (ch === '\n') {
+                let br = document.createElement('span');
+                br.className = 'pc-br';
+                br.textContent = '\n';
+                frag.appendChild(br);
+            } else {
+                let span = document.createElement('span');
+                span.className = 'pc';
+                span.textContent = ch;
+                // 随机浮动相位（每个字不同步）
+                let phase = (Math.random() * 4 + 2).toFixed(1);
+                span.style.setProperty('--ad', phase + 's');
+                frag.appendChild(span);
+                charSpans.push(span);
+            }
+        }
+        poemBody.appendChild(frag);
+    }
+    buildCharSpans();
+
+    /* ===== 全局状态 ===== */
+    let W, H, mouseX = -9999, mouseY = -9999;
+    let stars = [], raindrops = [], ripples = [];
+    const RADIUS = 95; // 190px 直径
+
+    function resize() {
+        W = canvas.width = window.innerWidth;
+        H = canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    /* ========== 星空 ========== */
+    const STAR_COUNT = 200;
+    function initStars() {
+        stars = [];
+        for (let i = 0; i < STAR_COUNT; i++) {
+            stars.push({
+                x: Math.random() * W,
+                y: Math.random() * H,
+                r: Math.random() * 1.5 + 0.3,
+                twinkle: Math.random() * Math.PI * 2,
+                twinkleSpeed: Math.random() * 0.02 + 0.005,
+                baseAlpha: Math.random() * 0.5 + 0.5
+            });
+        }
+    }
+    initStars();
+
+    function drawStars() {
+        for (let s of stars) {
+            s.twinkle += s.twinkleSpeed;
+            let alpha = s.baseAlpha + Math.sin(s.twinkle) * 0.3;
+            alpha = Math.max(0.2, Math.min(1, alpha));
+            ctx.fillStyle = `rgba(220,230,255,${alpha})`;
+            ctx.beginPath();
+            ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+
+    /* ========== 细雨（含鼠标排斥 & 字符碰撞分裂） ========== */
+    // 字符区域缓存（每 10 帧刷新一次）
+    let charRects = [];
+    let rectsFrame = 0;
+
+    function refreshCharRects() {
+        charRects = [];
+        for (let s of charSpans) {
+            let r = s.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) {
+                charRects.push({ left: r.left, top: r.top, right: r.right, bottom: r.bottom });
+            }
+        }
+    }
+    refreshCharRects();
+
+    function addDrop(x, y, vx, vy, len, opacity, gravity, noSplit) {
+        raindrops.push({ x, y, vx, vy, len, opacity, gravity, noSplit: !!noSplit });
+    }
+
+    function spawnRain() {
+        addDrop(
+            Math.random() * W * 1.2 - W * 0.1,
+            Math.random() * -120 - 10,
+            (Math.random() - 0.5) * 0.6,
+            Math.random() * 5 + 4,
+            Math.random() * 14 + 10,
+            Math.random() * 0.3 + 0.08,
+            0.06
+        );
+    }
+
+    function hitCharRect(x, y) {
+        for (let cr of charRects) {
+            if (x >= cr.left && x <= cr.right && y >= cr.top && y <= cr.bottom) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function updateRain() {
+        rectsFrame++;
+        if (rectsFrame % 10 === 0) refreshCharRects();
+
+        for (let i = raindrops.length - 1; i >= 0; i--) {
+            let r = raindrops[i];
+
+            // 重力
+            r.vy += r.gravity;
+
+            // 鼠标排斥
+            if (mouseX > -100 && mouseY > -100) {
+                let dx = r.x - mouseX;
+                let dy = r.y - mouseY;
+                let dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist < RADIUS && dist > 0.1) {
+                    let force = (1 - dist / RADIUS) * 6;
+                    r.x += (dx / dist) * force;
+                    r.y += (dy / dist) * force;
+                    r.vx += (dx / dist) * force * 0.3;
+                    r.vy += (dy / dist) * force * 0.3;
+                }
+            }
+
+            // 碰撞字符 → 随机角度弹射分裂
+            if (!r.noSplit && hitCharRect(r.x, r.y)) {
+                let halfLen = r.len * 0.55;
+                let halfOpacity = r.opacity * 0.7;
+                // 随机弹射角度（向上为主）
+                let a1 = Math.random() * Math.PI * 0.7 + Math.PI * 0.15;  // 27° ~ 153°（向上扇形）
+                let a2 = Math.random() * Math.PI * 0.7 + Math.PI * 0.15;
+                let speed1 = (Math.random() * 1.5 + 1.5);
+                let speed2 = (Math.random() * 1.5 + 1.5);
+                addDrop(r.x, r.y,
+                    Math.cos(a1) * speed1,
+                    -Math.sin(a1) * speed1,
+                    halfLen, halfOpacity, 0.12, true);
+                addDrop(r.x, r.y,
+                    Math.cos(a2) * speed2,
+                    -Math.sin(a2) * speed2,
+                    halfLen, halfOpacity, 0.12, true);
+                raindrops.splice(i, 1);
+                continue;
+            }
+
+            r.x += r.vx;
+            r.y += r.vy;
+
+            if (r.y > H + 30 || r.y < -200 || r.x < -100 || r.x > W + 100) {
+                raindrops.splice(i, 1);
+            }
+        }
+        let target = Math.floor(W / 2);
+        while (raindrops.length < target) spawnRain();
+    }
+
+    function drawRain() {
+        for (let r of raindrops) {
+            // 用速度方向反推雨滴倾斜角
+            let speed = Math.sqrt(r.vx * r.vx + r.vy * r.vy);
+            if (speed < 0.01) speed = 1;
+            let nx = r.vx / speed;
+            let ny = r.vy / speed;
+            ctx.strokeStyle = `rgba(180,200,230,${r.opacity})`;
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(r.x, r.y);
+            ctx.lineTo(r.x - nx * r.len * 0.5, r.y - ny * r.len * 0.5);
+            ctx.stroke();
+        }
+    }
+
+    function updateRipples() {
+        for (let i = ripples.length - 1; i >= 0; i--) {
+            let rp = ripples[i];
+            rp.radius += rp.speed;
+            rp.opacity -= 0.008;
+            if (rp.opacity <= 0 || rp.radius > rp.maxRadius) ripples.splice(i, 1);
+        }
+    }
+
+    function drawRipples() {
+        for (let rp of ripples) {
+            let alpha = rp.opacity, ratio = rp.radius / rp.maxRadius;
+            ctx.strokeStyle = `rgba(180,200,230,${alpha * (1 - ratio)})`;
+            ctx.lineWidth = 0.8 * (1 - ratio);
+            ctx.beginPath();
+            ctx.ellipse(rp.x, rp.y, rp.radius, rp.radius * 0.35, 0, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+    }
+
+    /* ========== 逐字变色（核心逻辑） ========== */
+    function updateCharColors() {
+        if (mouseX < -100 || mouseY < -100) {
+            for (let s of charSpans) {
+                s.style.color = 'rgba(210,200,190,0.85)';
+                s.style.textShadow = '0 0 8px rgba(255,255,255,0.1)';
+            }
+            return;
+        }
+
+        for (let s of charSpans) {
+            let rect = s.getBoundingClientRect();
+            let cx = rect.left + rect.width / 2;
+            let cy = rect.top + rect.height / 2;
+            let dx = cx - mouseX;
+            let dy = cy - mouseY;
+            let dist = Math.sqrt(dx * dx + dy * dy);
+
+            if (dist < RADIUS) {
+                let t = 1 - dist / RADIUS; // 1(最近) ~ 0(边界)
+                let r = Math.floor(240 + t * 15);
+                let g = Math.floor(200 + t * 55);
+                let b = Math.floor(180 + t * 75);
+                let alpha = 0.85 + t * 0.15;
+                let glow = t * 18;
+                s.style.color = `rgba(${r},${g},${b},${alpha})`;
+                s.style.textShadow = `0 0 ${glow}px rgba(255,240,200,${t})`;
+            } else {
+                s.style.color = 'rgba(210,200,190,0.85)';
+                s.style.textShadow = '0 0 8px rgba(255,255,255,0.1)';
+            }
+        }
+    }
+
+    /* ========== 鼠标 / 触摸 ========== */
+    document.addEventListener('mousemove', function(e) {
+        mouseX = e.clientX; mouseY = e.clientY;
+    });
+    document.addEventListener('mouseleave', function() {
+        mouseX = -9999; mouseY = -9999;
+    });
+    document.addEventListener('touchmove', function(e) {
+        let t = e.touches[0];
+        mouseX = t.clientX; mouseY = t.clientY;
+    }, { passive: true });
+    document.addEventListener('touchend', function() {
+        mouseX = -9999; mouseY = -9999;
+    });
+
+    /* ========== 主循环 ========== */
+    function animate() {
+        let grad = ctx.createLinearGradient(0, 0, 0, H);
+        grad.addColorStop(0, '#05051a');
+        grad.addColorStop(0.5, '#0a0f25');
+        grad.addColorStop(0.85, '#0d1528');
+        grad.addColorStop(1, '#111a30');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, W, H);
+
+        drawStars();
+        updateRain();
+        drawRain();
+        updateRipples();
+        drawRipples();
+        updateCharColors();
+
+        let glow = ctx.createLinearGradient(0, H - 30, 0, H);
+        glow.addColorStop(0, 'rgba(60,70,120,0)');
+        glow.addColorStop(1, 'rgba(60,70,120,0.12)');
+        ctx.fillStyle = glow;
+        ctx.fillRect(0, H - 30, W, 30);
+
+        requestAnimationFrame(animate);
+    }
+
+    animate();
+
+    let resizeTimer;
+    window.addEventListener('resize', function() {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(function() { resize(); initStars(); }, 300);
+    });
+})();
+</script>
+
+</body>
+</html>

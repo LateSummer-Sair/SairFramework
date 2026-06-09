@@ -1,0 +1,138 @@
+# SairFramework
+![avatar][base64str]
+
+<a href="https://sairwork.top:12846/Share/SairFrameWork/readme/" target="_blank" title="点我查看官方文档（需要IPv6访问）">点我查看官方文档（需要IPv6访问）</a>
+<br>
+#### SFW的简单介绍
+
+使用Java编写的一个多组件融合交互平台,作用是为了避免无用的冗余.<br>
+使用后缀名为ir的文本文件驱动,当然,你也可以直接java -jar SFW.jar来使用.<br>
+<br>
+>Windows平台直接双击ir后缀的文件,然后将打开方式指向到run.bat这个批处理并记住打开方式就行了<br>
+>Linux平台则需要手动把ir文件的目录传给SFW.jar,只需要在命令后面加上ir文件的目录就行<br>
+>你也可以手动在SFW打开后输入/ir命令来进行ir脚本的执行操作<br>
+<br>
+使用SFW.jar作为导入包来使用时,不需要将SFW.jar放到你的项目目录,仅需导入外部包即可,因为整个SairFrameWork目录就是一个整体.<br>
+<br>
+SFW的plugins插件制作也就是如此进行.<br>
+
+#### 插件制作:
+
+首先,插件需要在Java的jar文件META-INF/MANIFEST.MF文件中加入ACT标识来告诉SFW主入口在哪里<br>
+
+>比如原文是仅有一行的:Manifest-Version: 1.0<br>
+>那么你就需要在文件内容末尾加入ACT: Activity类的所在包名;<br>
+
+举例:
+
+
+	Manifest-Version: 1.0
+	ACT: sair.ire.MyActivity;
+	
+
+或者:
+
+	
+	Manifest-Version: 1.0
+	ACT: sair.ire.IMyActivity_A;sair.ire.MyActivity_B;
+	
+
+继承了sair.user.Activity这个抽象类的类都可以视作一个Activity被SFW加载,但是需要如刚才所说的在MF文件中标注起来.
+
+#### 插件调试:
+
+插件调试首先要将插件导入SFW.jar这个包,然后自行在插件里面创建一个public static void main函数,在这个主入口函数中,你可以这样操作:<br>
+ 
+方法一:	 <br>
+
+	
+	public static void main(String[] args) throws Exception {
+
+		//新建一个自己的Activity对象
+		Activity myacti = new MyActivity();
+		
+		// 使用Main中的toTest函数进行指令测试
+		Main.toTest(myacti, "list", "");
+		Main.toTest(myacti, "add", "\"E:\\Test\\LRCTEST\"");
+
+	} 
+	
+
+方法二:	 <br>
+
+	
+	public static void main(String[] args) throws Exception {
+	
+		// 新建一个自己的Activity
+		Activity myacti = new MyActivity();
+		
+		// 给定一个测试名称为kft
+		myacti.setName("kft");
+		
+		// 把这个kft对象放到Libraries的activities记录里面
+		Libraries.activities.put("kft", myacti);
+		
+		// 传入空参数调用toTest用于加载其他组件和依赖
+		Main.toTest(myacti, "", "");
+		
+		// 使用SairCons.runner进行调用(此时可以对其他组件也进行使用)
+		SairCons.runner(false, "jj/unstop");
+		SairCons.runner(false, "jj/setca 0");
+		SairCons.runner(false, "kft/reco");
+
+	} 
+
+插件在打包时仅需选择普通的Jar文件就行,不需要选择可执行Jar,并且只需要打包自己的目录,<br>
+不需要连同其他依赖一起打包.(插件的打包要记得改写MF文件才能被加载器识别)<br>
+
+
+#### 插件的使用:
+如果是插件的依赖,其实你大可不必跟插件一起打包,除非是硬性需求,如果是普通依赖,直接丢进plugins/modlib即可,<br>
+会由SairLoader加载器负责加载,当然,你获取文件流也得使用SairLoader加载器进行.<br>
+如果这个插件对JVM的功能有所修补,需要用到线程上下文操作,<br>
+或者SPI,那么就得放进plugins/bootlib里面由系统加载器<br>
+来进行加载.<br>
+<br>
+准备就绪的插件的本体放到plugins/exection,再打开SFW输入/list命令就能看到你的插件名称了.<br>
+插件初始名称是根据文件名来决定的,你可以在SFW内用命令进行临时重命名,这种命名在SFW重启后失效.<br>
+
+#### 命令格式:
+
+SFW命令格式是很简单的
+
+举例:	 
+
+><br>
+>有一条命令为:    pl/start 5<br>
+>那么在其中pl指的是这个插件名,中间用/符号分隔告诉SFW命令名结束<br>
+>(这种是为了兼容空格文件名),<br>
+>然后紧跟其后的start是pl这个组件中的实现功能名称,后一个空格是告诉SFW功能名称结束,<br>
+>最后的数字5就是输入的功能参数,空格后面的内容不再有其他区分,<br>
+>完全由插件制作者再次进行加工.<br>
+><br>
+>不输入插件名,直接输入/后面加功能名则会唤起SFW内置的命令,比如:<br>
+>/exit 就表示退出<br>
+>/println-c 255 0 0 Hello World  就是输出红色的Hello World<br>
+><br>
+<br>
+在ir脚本中,你可以直接用记事本打开编辑内容,内容就是一条一条的命令自动一行一行执行,<br>
+内容支持注释,一行的最前面加双斜杠//就是注释,内容去向就是SFW的控制台进行执行.<br>
+<br>
+SFW不是单例窗口,你每双击一次ir文件打开,就是一个全新的SFW进程.<br>
+
+#### 兼容性:
+系统支持:这个软件在Linux发行版,Windows,以及所有支持Java的系统中可以被直接运行,无需进行二次编译<br>
+Java支持:Java8及以上可以被直接打开,推荐使用Java8并且是JDK,<br>
+Java8以上的JDK/JRE是重启SFW后使用虚拟机参数加载的bootlib目录,<br>
+所以无法被热卸载,但是Java8可以.<br>
+
+#### 关于其他项目:
+因为这整个账号的仓库都是围绕这一个SFW进行开源的,所以其他的仓库就不写README文件了<br>
+
+
+#### 参与开发:
+<a href="tencent://message/?uin=1284688456&Site=&Menu=yes" target="_blank" title="点击添加Sair的QQ联系方式">Sair</a>
+
+
+
+[base64str]:data:image/png;base64,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

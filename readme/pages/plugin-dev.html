@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>插件开发指南 - SairFramework</title>
+    <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+<div class="doc-container" id="top">
+
+    <div class="doc-header ani-fade-in-up">
+        <h1 class="doc-title">插件开发指南</h1>
+        <p class="doc-subtitle">深入理解 SairFramework 插件开发的核心概念与最佳实践。</p>
+    </div>
+
+    <!-- Activity 详解 -->
+    <h2 class="ani-fade-in-up ani-delay-1">📦 Activity 抽象类</h2>
+
+    <div class="card ani-fade-in-up ani-delay-2">
+        <div class="card-title"><span class="card-icon">🧬</span> Activity 是插件的核心</div>
+        <p>每个插件至少包含一个继承自 <code>sair.user.Activity</code> 的类。Activity 提供了插件所需的基础设施：</p>
+        <table class="doc-table">
+            <thead><tr><th>方法</th><th>说明</th><th>是否必须重写</th></tr></thead>
+            <tbody>
+                <tr><td><code>main(String funcName, String args)</code></td><td>命令处理入口，funcName 为功能名，args 为参数</td><td><span class="badge badge-danger">必须</span></td></tr>
+                <tr><td><code>help()</code></td><td>返回帮助信息字符串数组</td><td><span class="badge badge-danger">必须</span></td></tr>
+                <tr><td><code>exit()</code></td><td>插件被卸载时调用，用于清理资源</td><td><span class="badge badge-danger">必须</span></td></tr>
+                <tr><td><code>dataDir()</code></td><td>自定义数据目录，默认为类的全限定名</td><td>可选</td></tr>
+                <tr><td><code>o_funcMain(Object o)</code></td><td>处理 ofunc 内置命令的返回值</td><td>可选</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="card ani-fade-in-up ani-delay-2">
+        <div class="card-title"><span class="card-icon">🔄</span> main() 方法返回值规则</div>
+        <table class="doc-table">
+            <thead><tr><th>返回值</th><th>框架行为</th></tr></thead>
+            <tbody>
+                <tr><td><code>true</code> 或非 <code>Boolean</code> 对象</td><td>正常执行完毕，无额外输出</td></tr>
+                <tr><td><code>false</code></td><td>功能未找到或执行失败，<strong>自动打印 help 信息</strong></td></tr>
+                <tr><td><code>null</code></td><td>无任何效果（静默）</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="card ani-fade-in-up ani-delay-2">
+        <div class="card-title"><span class="card-icon">🗂️</span> 数据目录</div>
+        <p>每个 Activity 自动拥有独立的数据目录，位于 <code>data/</code> 下。通过 <code>getDataDir()</code> 获取。目录在首次访问时自动创建。</p>
+        <pre><code><span class="cmt">// 默认数据目录: data/sair.myplugin.MyActivity/</span>
+<span class="typ">String</span> path = <span class="kw">this</span>.<span class="fn">getDataDir</span>();
+
+<span class="cmt">// 通过重写 dataDir() 自定义:</span>
+<span class="ann">@Override</span>
+<span class="kw">protected</span> <span class="typ">String</span> <span class="fn">dataDir</span>() {
+    <span class="kw">return</span> <span class="str">"myplugin"</span>; <span class="cmt">// → data/myplugin/</span>
+}</code></pre>
+    </div>
+
+    <!-- 命令系统 -->
+    <h2 class="ani-fade-in-up ani-delay-1">📋 命令系统详解</h2>
+
+    <div class="card ani-fade-in-up ani-delay-2">
+        <div class="card-title"><span class="card-icon">⌨️</span> 命令格式</div>
+        <p>SFW 命令格式为：<code>插件名/功能名 参数</code></p>
+        <pre><code><span class="cmt"># 完整命令格式</span>
+myplugin/hello
+myplugin/greet World
+
+<span class="cmt"># 以 / 开头调用 SFW 内置命令（不指定插件名）</span>
+/exit          <span class="cmt"># 退出框架</span>
+/list          <span class="cmt"># 列出已加载插件</span>
+/print Hello   <span class="cmt"># 在控制台打印</span>
+/clear         <span class="cmt"># 清屏</span></code></pre>
+    </div>
+
+    <div class="card ani-fade-in-up ani-delay-2">
+        <div class="card-title"><span class="card-icon">🔄</span> 命令解析流程</div>
+        <p>SFW 使用 <code>SystemSpliter</code> 解析命令字符串，分解为三部分：</p>
+        <table class="doc-table">
+            <thead><tr><th>部分</th><th>来源</th><th>示例</th></tr></thead>
+            <tbody>
+                <tr><td><code>getExecName()</code></td><td><code>/</code> 之前的内容</td><td><code>myplugin</code></td></tr>
+                <tr><td><code>getExecFunc()</code></td><td><code>/</code> 之后、空格之前</td><td><code>hello</code></td></tr>
+                <tr><td><code>getArgs()</code></td><td>空格之后的全部内容</td><td><code>World</code></td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="card ani-fade-in-up ani-delay-2">
+        <div class="card-title"><span class="card-icon">🏷️</span> 内置命令</div>
+        <p>每个 Activity 默认拥有以下内置命令（由 <code>OderFact</code> 处理，不需要在 <code>main()</code> 中处理）：</p>
+        <table class="doc-table">
+            <thead><tr><th>命令</th><th>说明</th></tr></thead>
+            <tbody>
+                <tr><td><code>help</code></td><td>显示插件帮助信息</td></tr>
+                <tr><td><code>exit</code></td><td>调用插件的 exit() 方法</td></tr>
+                <tr><td><code>info</code></td><td>显示插件的 data 目录和 JAR 路径</td></tr>
+                <tr><td><code>close</code></td><td>临时关闭插件的命令接收（插件仍然在内存中）</td></tr>
+                <tr><td><code>open</code></td><td>重新打开插件的命令接收</td></tr>
+                <tr><td><code>oset 新名 原名</code></td><td>为已有命令创建别名</td></tr>
+                <tr><td><code>orem 别名</code></td><td>删除命令别名</td></tr>
+                <tr><td><code>ofunc '命令'</code></td><td>执行一个命令并将其返回值传入 <code>o_funcMain()</code></td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- 插件生命周期 -->
+    <h2 class="ani-fade-in-up ani-delay-1">🔄 插件生命周期</h2>
+
+    <div class="card ani-fade-in-up ani-delay-2">
+        <div class="card-title"><span class="card-icon">⏳</span> 生命周期阶段</div>
+        <ol class="step-list">
+            <li><strong>发现</strong> — SFW 扫描 <code>plugins/exection/</code> 中的 JAR 文件</li>
+            <li><strong>读取</strong> — 解析 MANIFEST.MF 中的 <code>ACT</code> 属性</li>
+            <li><strong>加载</strong> — <code>ExectionLoader</code> 加载 JAR，使用 <code>LoaderManager.loadMain()</code> 实例化 Activity</li>
+            <li><strong>命名</strong> — <code>Libraries.setActivityName()</code> 自动分配名称（默认为 JAR 文件名，重名则追加数字）</li>
+            <li><strong>注册</strong> — 将 Activity 存入 <code>Libraries.activities</code> 和 <code>Libraries.exections</code></li>
+            <li><strong>运行</strong> — Activity 就绪，可接收命令</li>
+            <li><strong>卸载</strong> — 调用 <code>exit()</code> 后从 Libraries 中移除，关闭 ClassLoader</li>
+        </ol>
+    </div>
+
+    <div class="card ani-fade-in-up ani-delay-2">
+        <div class="card-title"><span class="card-icon">🏷️</span> 插件命名规则</div>
+        <p>插件名称默认为 JAR 文件名（去掉 <code>.jar</code> 后缀）。如果多个插件同名，框架会自动追加数字后缀（-1, 0, 1, 2...）。</p>
+        <p>可以使用内置命令 <code>/rename 旧名 新名</code> 临时重命名，但重启 SFW 后失效。</p>
+    </div>
+
+    <!-- SFW 内置命令 -->
+    <h2 class="ani-fade-in-up ani-delay-1">⚡ SFW 控制台内置命令</h2>
+
+    <div class="card ani-fade-in-up ani-delay-2">
+        <div class="card-title"><span class="card-icon">🎛️</span> 所有内置命令参考</div>
+        <table class="doc-table">
+            <thead><tr><th>命令</th><th>说明</th></tr></thead>
+            <tbody>
+                <tr><td><code>/help</code></td><td>显示所有内置命令帮助</td></tr>
+                <tr><td><code>/exit</code></td><td>退出 SFW</td></tr>
+                <tr><td><code>/clear</code></td><td>清空控制台</td></tr>
+                <tr><td><code>/print [text]</code></td><td>打印文本</td></tr>
+                <tr><td><code>/print-c R G B [text]</code></td><td>彩色打印（RGB 值 0-255）</td></tr>
+                <tr><td><code>/println [text]</code></td><td>打印文本并换行</td></tr>
+                <tr><td><code>/println-c R G B [text]</code></td><td>彩色打印并换行</td></tr>
+                <tr><td><code>/print-f [path]</code></td><td>打印图片（仅支持文件路径）</td></tr>
+                <tr><td><code>/print-ti</code></td><td>打印系统信息头（Java版本、路径等）</td></tr>
+                <tr><td><code>/deprint offset len</code></td><td>删除控制台指定范围的文本</td></tr>
+                <tr><td><code>/list</code></td><td>列出已加载的插件</td></tr>
+                <tr><td><code>/list-s</code></td><td>列出插件详细信息</td></tr>
+                <tr><td><code>/setBG [path]</code></td><td>设置控制台背景图片</td></tr>
+                <tr><td><code>/setBC R G B</code></td><td>设置控制台背景色</td></tr>
+                <tr><td><code>/setFC R G B</code></td><td>设置控制台前景色（字体色）</td></tr>
+                <tr><td><code>/setFCM target R G B</code></td><td>设置特定场景的颜色（ui-error/ex-help等）</td></tr>
+                <tr><td><code>/ir [path]</code></td><td>执行 IR 脚本文件</td></tr>
+                <tr><td><code>/ir-x [name]</code></td><td>停止指定的 IR 脚本</td></tr>
+                <tr><td><code>/ir-i [path]</code></td><td>使用当前线程执行 IR（注意会阻塞）</td></tr>
+                <tr><td><code>/hide</code></td><td>隐藏控制台窗口</td></tr>
+                <tr><td><code>/show</code></td><td>显示控制台窗口</td></tr>
+                <tr><td><code>/resize W H</code></td><td>调整窗口大小</td></tr>
+                <tr><td><code>/sleep ms</code></td><td>线程休眠（毫秒）</td></tr>
+                <tr><td><code>/newthread [cmd]</code></td><td>在新线程中执行命令</td></tr>
+                <tr><td><code>/setspliter [class]</code></td><td>切换命令解析器（实现 SpliterSPI 的类）</td></tr>
+                <tr><td><code>/rename 旧名 新名</code></td><td>重命名插件</td></tr>
+                <tr><td><code>/var-add 名 值</code></td><td>设置环境变量（可在命令中用 %名% 引用）</td></tr>
+                <tr><td><code>/var-del 名</code></td><td>删除环境变量</td></tr>
+                <tr><td><code>/var-list</code></td><td>列出所有环境变量</td></tr>
+                <tr><td><code>/print-cpr [name]</code></td><td>设置打印代理模式（name 为空则取消）</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- 最佳实践 -->
+    <h2 class="ani-fade-in-up ani-delay-1">✨ 最佳实践</h2>
+
+    <div class="card ani-fade-in-up ani-delay-2">
+        <div class="card-title"><span class="card-icon">🎯</span> 开发建议</div>
+        <ul>
+            <li><strong>分离逻辑</strong> — 将 <code>main()</code> 中的 switch 分支委托给独立的 Action 类处理（参考 <code>ActivityAction</code> 模式）</li>
+            <li><strong>参数解析</strong> — 使用 <code>ToolPack.pathRepack()</code> 处理带双引号的文件路径</li>
+            <li><strong>使用 SaComS</strong> — 善用 SaComS 工具包提供的文件操作、字符串处理等能力</li>
+            <li><strong>资源清理</strong> — 在 <code>exit()</code> 中关闭所有打开的资源（文件句柄、网络连接等）</li>
+            <li><strong>色彩规范</strong> — 使用 <code>FCM</code> 类中定义的色彩常量保持界面一致性</li>
+            <li><strong>依赖放置</strong> — 如果插件有额外依赖 JAR，放入 <code>plugins/modlib/</code>（普通依赖）或 <code>plugins/bootlib/</code>（系统级依赖）</li>
+        </ul>
+    </div>
+
+    <div class="info-box warn ani-fade-in-up ani-delay-2">
+        <div class="info-box-title">⚠️ 注意事项</div>
+        <ul>
+            <li>插件打包时不要包含 <code>SFW.jar</code> 或 <code>SaComS.jar</code>——这些由框架提供</li>
+            <li>MANIFEST.MF 的 ACT 值末尾<strong>必须有分号</strong></li>
+            <li>多个 Activity 的类名用分号分隔</li>
+            <li>插件名称由 JAR 文件名决定，避免使用特殊字符</li>
+        </ul>
+    </div>
+
+    <hr class="gradient-divider">
+
+    <p style="text-align:center;color:var(--text-muted);font-size:0.85rem;">
+        下一步：查看 <a class="internal" href="api.html" target="_self">框架核心 API</a>
+    </p>
+
+</div>
+<button class="back-to-top" onclick="window.scrollTo({top:0,behavior:'smooth'})" title="回到顶部">↑</button>
+<script>
+    const btn = document.querySelector('.back-to-top');
+    window.addEventListener('scroll', () => {
+        btn.classList.toggle('visible', window.scrollY > 400);
+    });
+</script>
+</body>
+</html>

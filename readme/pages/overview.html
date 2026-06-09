@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>框架概述 - SairFramework</title>
+    <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+<div class="doc-container" id="top">
+
+    <div class="doc-header ani-fade-in-up">
+        <h1 class="doc-title">SairFramework 框架概述</h1>
+        <p class="doc-subtitle">一个基于 Java 的多组件融合交互平台，以 IR 文本驱动为核心，支持热插拔插件架构。</p>
+    </div>
+
+    <!-- 框架简介 -->
+    <div class="card ani-fade-in-up ani-delay-1">
+        <div class="card-title"><span class="card-icon">💡</span> 什么是 SairFramework？</div>
+        <p>SairFramework（简称 <strong>SFW</strong>）是一个使用 Java 编写的<strong>多组件融合交互平台</strong>。它的核心设计理念是避免无用冗余，通过统一的后缀名为 <code>.ir</code> 的文本文件驱动各个组件协同工作。</p>
+        <p>SFW 提供了一个控制台 GUI 界面，你可以在其中输入命令与各个插件交互。它支持<strong>热加载/热卸载</strong>插件，无需重启即可动态添加和移除功能。</p>
+    </div>
+
+    <!-- 核心特性 -->
+    <h2 class="ani-fade-in-up ani-delay-1">🌟 核心特性</h2>
+    <div class="feature-grid ani-fade-in-up ani-delay-2">
+        <div class="feature-item">
+            <div class="fi-icon">🔌</div>
+            <div class="fi-title">热插拔插件系统</div>
+            <div class="fi-desc">插件可随时加载或卸载，无需重启框架。基于自定义 ClassLoader 实现隔离。</div>
+        </div>
+        <div class="feature-item">
+            <div class="fi-icon">📜</div>
+            <div class="fi-title">IR 脚本驱动</div>
+            <div class="fi-desc">使用 .ir 后缀文本文件编写脚本，支持标签跳转、变量替换、嵌入式命令执行。</div>
+        </div>
+        <div class="feature-item">
+            <div class="fi-icon">🖥️</div>
+            <div class="fi-title">Swing GUI 控制台</div>
+            <div class="fi-desc">内置精美的暗色主题控制台，支持彩色输出、背景图片、自定义字体和颜色。</div>
+        </div>
+        <div class="feature-item">
+            <div class="fi-icon">🔄</div>
+            <div class="fi-title">跨平台兼容</div>
+            <div class="fi-desc">支持 Windows、Linux 及所有 Java 支持的平台。Java 8 及以上版本均可运行。</div>
+        </div>
+        <div class="feature-item">
+            <div class="fi-icon">🧰</div>
+            <div class="fi-title">SaComS 工具包</div>
+            <div class="fi-desc">内置丰富的工具类库：文件管理、网络请求、数据库连接、字符串处理、图像处理、拼音转换等。</div>
+        </div>
+        <div class="feature-item">
+            <div class="fi-icon">🏗️</div>
+            <div class="fi-title">中文代码支持</div>
+            <div class="fi-desc">原生支持中文包名、中文类名，配合中文组件支持包实现全中文编程。</div>
+        </div>
+    </div>
+
+    <!-- 架构概览 -->
+    <h2 class="ani-fade-in-up ani-delay-1">🏗️ 架构概览</h2>
+
+    <div class="card ani-fade-in-up ani-delay-2">
+        <div class="card-title"><span class="card-icon">📐</span> 目录结构</div>
+        <pre><code>SairFrameWork/
+├── <span class="typ">SFW.jar</span>                  <span class="cmt"># 框架核心 JAR（既是运行入口也是开发依赖）</span>
+├── <span class="typ">run.bat</span>                   <span class="cmt"># Windows 快速启动批处理</span>
+├── <span class="typ">data/</span>                     <span class="cmt"># 插件数据目录（每个 Activity 自动拥有）</span>
+├── <span class="typ">plugins/</span>
+│   ├── <span class="typ">bootlib/</span>              <span class="cmt"># 系统级依赖（使用系统 ClassLoader 加载）</span>
+│   ├── <span class="typ">modlib/</span>               <span class="cmt"># 普通依赖库（使用 SairLoader 加载）</span>
+│   └── <span class="typ">exection/</span>             <span class="cmt"># 插件本体目录（存放开发的插件 JAR）</span>
+├── <span class="typ">source_code/</span>
+│   ├── <span class="typ">source_code_SFW/</span>      <span class="cmt"># 框架核心源码</span>
+│   ├── <span class="typ">source_code_SaComS/</span>   <span class="cmt"># SaComS 工具包源码</span>
+│   └── <span class="typ">source_code_execs/</span>    <span class="cmt"># 各种插件源码示例</span>
+└── <span class="typ">readme/</span>                   <span class="cmt"># 本文档目录</span></code></pre>
+    </div>
+
+    <h2 class="ani-fade-in-up ani-delay-1">⚙️ 工作原理</h2>
+
+    <div class="card ani-fade-in-up ani-delay-2">
+        <div class="card-title"><span class="card-icon">🔄</span> 启动流程</div>
+        <ol class="step-list">
+            <li><strong>JVM 检测</strong> — 检测当前 Java 版本。非 Java 8 时会自动重启并使用 <code>-Xbootclasspath/a</code> 加载 bootlib</li>
+            <li><strong>加载 bootlib</strong> — 使用系统 ClassLoader 加载 <code>plugins/bootlib/</code> 中的 JAR</li>
+            <li><strong>加载 modlib</strong> — 使用 <code>SairLoader</code>（自定义 ClassLoader）加载 <code>plugins/modlib/</code> 中的 JAR</li>
+            <li><strong>加载 exection</strong> — 扫描 <code>plugins/exection/</code> 中的 JAR，读取 MANIFEST.MF 中的 <code>ACT</code> 属性，实例化 Activity</li>
+            <li><strong>启动控制台</strong> — 显示 GUI 控制台窗口，等待用户输入命令</li>
+            <li><strong>自动执行</strong> — 如通过双击 .ir 文件启动，则自动执行脚本内容</li>
+        </ol>
+    </div>
+
+    <div class="card ani-fade-in-up ani-delay-2">
+        <div class="card-title"><span class="card-icon">📋</span> 命令处理流程</div>
+        <pre><code>用户输入命令 → <span class="typ">SystemSpliter</span> 解析 → 获取 <span class="kw">Activity名称</span>/<span class="kw">功能名</span>/<span class="kw">参数</span>
+                    ↓
+           <span class="typ">Libraries.activities</span> 查找对应 Activity
+                    ↓
+           <span class="typ">OderFact.runner()</span> 处理内置命令（help/exit/info/ofunc...）
+                    ↓
+           <span class="typ">Activity.main(funcName, args)</span> 调用插件自定义功能</code></pre>
+    </div>
+
+    <div class="card ani-fade-in-up ani-delay-2">
+        <div class="card-title"><span class="card-icon">🧩</span> 类加载器层次</div>
+        <table class="doc-table">
+            <thead>
+                <tr><th>加载器</th><th>类型</th><th>加载目录</th><th>用途</th></tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><code>System ClassLoader</code></td>
+                    <td><span class="badge badge-accent">系统</span></td>
+                    <td><code>plugins/bootlib/</code></td>
+                    <td>JVM 功能修补、SPI、线程上下文操作</td>
+                </tr>
+                <tr>
+                    <td><code>SairLoader</code></td>
+                    <td><span class="badge badge-accent2">自定义</span></td>
+                    <td><code>plugins/modlib/</code></td>
+                    <td>普通依赖库，支持热卸载</td>
+                </tr>
+                <tr>
+                    <td><code>ExectionLoader</code></td>
+                    <td><span class="badge badge-warn">自定义</span></td>
+                    <td><code>plugins/exection/</code></td>
+                    <td>插件隔离加载，每个插件独立 ClassLoader</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- 兼容性 -->
+    <h2 class="ani-fade-in-up ani-delay-1">🖥️ 兼容性</h2>
+    <div class="card ani-fade-in-up ani-delay-2">
+        <div class="card-title"><span class="card-icon">✅</span> 系统与 Java 支持</div>
+        <table class="doc-table">
+            <thead><tr><th>项目</th><th>要求</th></tr></thead>
+            <tbody>
+                <tr><td><strong>操作系统</strong></td><td>Windows、Linux 及所有支持 Java 的系统</td></tr>
+                <tr><td><strong>Java 版本</strong></td><td>Java 8 及以上（推荐 JDK 8）</td></tr>
+                <tr><td><strong>特别注意</strong></td><td>Java 8 以上版本使用虚拟机参数加载 bootlib，无法热卸载；Java 8 可以</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="info-box tip ani-fade-in-up ani-delay-2">
+        <div class="info-box-title">💡 提示</div>
+        <p>SFW 不是单例窗口。每双击一次 .ir 文件打开，就是一个全新的 SFW 进程。</p>
+    </div>
+
+    <hr class="gradient-divider">
+
+    <p style="text-align:center;color:var(--text-muted);font-size:0.85rem;">
+        下一步：前往 <a class="internal" href="quickstart.html" target="_self">快速开始</a> 创建你的第一个插件
+    </p>
+
+</div>
+<button class="back-to-top" onclick="window.scrollTo({top:0,behavior:'smooth'})" title="回到顶部">↑</button>
+<script>
+    // 回到顶部按钮
+    const btn = document.querySelector('.back-to-top');
+    window.addEventListener('scroll', () => {
+        btn.classList.toggle('visible', window.scrollY > 400);
+    });
+</script>
+</body>
+</html>

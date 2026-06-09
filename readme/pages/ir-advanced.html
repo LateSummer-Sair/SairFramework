@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IR脚本与高级主题 - SairFramework</title>
+    <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+<div class="doc-container" id="top">
+
+    <div class="doc-header ani-fade-in-up">
+        <h1 class="doc-title">IR 脚本与高级主题</h1>
+        <p class="doc-subtitle">掌握 IR 脚本语言、自定义命令解析器、插件目录机制等高级开发技能。</p>
+    </div>
+
+    <!-- IR 脚本 -->
+    <h2 class="ani-fade-in-up ani-delay-1">📜 IR 脚本语言</h2>
+
+    <div class="card ani-fade-in-up ani-delay-2">
+        <div class="card-title"><span class="card-icon">📝</span> 什么是 IR 脚本？</div>
+        <p>IR 脚本是 SairFramework 的自动化脚本语言，文件后缀为 <code>.ir</code>。它是一个纯文本文件，每一行都是一条 SFW 命令。SFW 会按行顺序执行这些命令。</p>
+        <p>IR 脚本可以直接用记事本打开编辑。你可以通过双击 <code>.ir</code> 文件（关联到 <code>run.bat</code>）来启动 SFW 并自动执行脚本。</p>
+    </div>
+
+    <div class="card ani-fade-in-up ani-delay-2">
+        <div class="card-title"><span class="card-icon">📄</span> 基本语法</div>
+        <pre><code><span class="cmt">// 这是注释：行首以双斜杠开头即为注释，不会被执行</span>
+
+<span class="cmt">// 空行会被忽略</span>
+
+<span class="cmt">// 以下都是有效的 IR 命令</span>
+/print-c 0 255 0 欢迎使用 SairFramework!
+/sleep 1000
+/println 正在初始化插件...
+myplugin/hello
+myplugin/greet IR脚本用户
+
+<span class="cmt">// 变量定义与使用</span>
+/var-add myPath D:\Test
+/println %myPath%</code></pre>
+    </div>
+
+    <div class="card ani-fade-in-up ani-delay-2">
+        <div class="card-title"><span class="card-icon">🏷️</span> 标签（Label）与跳转</div>
+        <p>IR 脚本支持标签定义与跳转，实现控制流。使用 <code>{} </code>（花括号）定义标签块，使用 <code>/TO:标签名</code> 跳转。</p>
+
+        <pre><code><span class="cmt">// 定义一个名为 "loop" 的标签块</span>
+loop {
+    /println 循环中...
+    /sleep 500
+    /println 再次循环!
+    /TO:loop          <span class="cmt">// 跳回 loop 标签继续执行（无限循环）</span>
+}
+
+<span class="cmt">// 主流程中调用标签</span>
+/println 开始执行
+/TO:loop             <span class="cmt">// 跳转到 loop 标签块</span>
+/println 这行不会执行（因为在无限循环中）</span></code></pre>
+
+        <div class="info-box warn">
+            <div class="info-box-title">⚠️ 标签语法要点</div>
+            <ul>
+                <li>标签名后紧跟 <code>{</code> 开始标签块（花括号前可以有空格）</li>
+                <li><code>}</code> 单独一行结束标签块</li>
+                <li>使用 <code>/TO:标签名</code> 跳转到指定标签</li>
+                <li>支持嵌套标签</li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="card ani-fade-in-up ani-delay-2">
+        <div class="card-title"><span class="card-icon">🔄</span> 变量替换</div>
+        <p>使用 <code>/var-add 变量名 值</code> 定义变量，在命令中用 <code>%变量名%</code> 引用。</p>
+
+        <pre><code><span class="cmt">// 定义变量</span>
+/var-add name Sair
+/var-add version 5.3
+
+<span class="cmt">// 使用变量</span>
+/println 作者: %name%
+/println 版本: %version%
+
+<span class="cmt">// 变量在路径中的应用</span>
+/var-add workDir D:\WorkSpace
+/print %workDir%\project</code></pre>
+    </div>
+
+    <div class="card ani-fade-in-up ani-delay-2">
+        <div class="card-title"><span class="card-icon">📌</span> 嵌入式命令</div>
+        <p>使用 <code>'命令'</code>（单引号包裹）可以在命令参数中嵌入另一个命令，嵌入命令的结果会被自动替换。</p>
+
+        <pre><code><span class="cmt">// 嵌入式命令：将内部命令的结果作为外部命令的参数</span>
+/println 'pl/getNowPlayID'
+
+<span class="cmt">// 等价于:
+// 1. 先执行 pl/getNowPlayID，获得返回值（如 "12345"）
+// 2. 再执行 /println 12345</span></code></pre>
+    </div>
+
+    <div class="card ani-fade-in-up ani-delay-2">
+        <div class="card-title"><span class="card-icon">🎛️</span> IR 脚本管理命令</div>
+        <table class="doc-table">
+            <thead><tr><th>命令</th><th>说明</th></tr></thead>
+            <tbody>
+                <tr><td><code>/ir "路径"</code></td><td>在新线程中执行 IR 脚本文件</td></tr>
+                <tr><td><code>/ir-i "路径"</code></td><td>使用当前线程执行 IR 脚本（会阻塞当前线程）</td></tr>
+                <tr><td><code>/ir-x 脚本名</code></td><td>停止指定的 IR 脚本</td></tr>
+            </tbody>
+        </table>
+
+        <div class="info-box tip">
+            <div class="info-box-title">💡 自动执行</div>
+            <p>SFW 启动时如果没有传入参数，会自动在 <code>data/framework/</code> 下查找并执行 <code>autorun.ir</code> 文件。你可以在此文件中编写启动时需要自动执行的任务。</p>
+        </div>
+    </div>
+
+    <!-- SpliterSPI -->
+    <h2 class="ani-fade-in-up ani-delay-1">🔌 SpliterSPI — 自定义命令解析器</h2>
+
+    <div class="card ani-fade-in-up ani-delay-2">
+        <div class="card-title"><span class="card-icon">🔧</span> 扩展命令解析</div>
+        <p>SFW 默认使用 <code>SystemSpliter</code> 解析 <code>插件名/功能名 参数</code> 格式的命令。你可以通过实现 <code>SpliterSPI</code> 抽象类来自定义命令解析方式。</p>
+
+        <h4>实现步骤</h4>
+        <ol class="step-list">
+            <li>创建一个类继承 <code>sair.user.SpliterSPI</code></li>
+            <li>实现 <code>getSpliter(String cmd)</code> 返回自定义的 <code>Spliter</code> 实现</li>
+            <li>实现 <code>getUninstallCMD()</code> 返回卸载此解析器的命令</li>
+            <li>将编译后的类放入 <code>plugins/modlib/</code></li>
+            <li>在 SFW 控制台输入 <code>/setspliter 类全限定名</code> 安装自定义解析器</li>
+        </ol>
+
+        <pre><code><span class="kw">package</span> <span class="typ">mypackage</span>;
+
+<span class="kw">import</span> <span class="typ">sair.user.SpliterSPI</span>;
+<span class="kw">import</span> <span class="typ">sair.sys.tools.Spliter</span>;
+
+<span class="kw">public class</span> <span class="typ">MySpliterSPI</span> <span class="kw">extends</span> <span class="typ">SpliterSPI</span> {
+
+    <span class="ann">@Override</span>
+    <span class="kw">public</span> <span class="typ">Spliter</span> <span class="fn">getSpliter</span>(<span class="typ">String</span> cmd) {
+        <span class="cmt">// 返回自定义的 Spliter 实现</span>
+        <span class="kw">return new</span> <span class="typ">MySpliter</span>(cmd);
+    }
+
+    <span class="ann">@Override</span>
+    <span class="kw">public</span> <span class="typ">String</span> <span class="fn">getUninstallCMD</span>() {
+        <span class="kw">return</span> <span class="str">"/my-spliter-uninstall"</span>;
+    }
+}</code></pre>
+    </div>
+
+    <!-- 三个插件目录 -->
+    <h2 class="ani-fade-in-up ani-delay-1">📂 插件目录详解</h2>
+
+    <div class="card ani-fade-in-up ani-delay-2">
+        <div class="card-title"><span class="card-icon">📁</span> 三个 plugins 子目录的用途</div>
+
+        <h3>1. <code>plugins/bootlib/</code> — 系统级依赖</h3>
+        <p>此目录中的 JAR 使用<strong>系统 ClassLoader</strong> 加载。适合放入需要对 JVM 功能进行修补、需要线程上下文操作或 SPI 机制的库。</p>
+        <div class="info-box warn">
+            <div class="info-box-title">⚠️ 注意</div>
+            <p>Java 8 以上版本中，bootlib 中的 JAR 无法被热卸载（需要重启 JVM）。Java 8 可以热卸载。</p>
+        </div>
+
+        <h3>2. <code>plugins/modlib/</code> — 普通依赖库</h3>
+        <p>此目录中的 JAR 使用 <code>SairLoader</code>（自定义 ClassLoader）加载。适合放入普通的第三方依赖库，如 <code>SaComS.jar</code>、<code>gson</code> 等。</p>
+        <p>可以随时通过 <code>SairLoader.removeJarFiles()</code> 热卸载。</p>
+
+        <h3>3. <code>plugins/exection/</code> — 插件本体</h3>
+        <p>此目录存放你开发的插件 JAR。<strong>每个插件使用独立的 <code>ExectionLoader</code></strong> 加载，实现插件间类隔离。</p>
+        <p>插件必须包含带有 <code>ACT</code> 声明的 <code>MANIFEST.MF</code> 文件。</p>
+    </div>
+
+    <div class="card ani-fade-in-up ani-delay-2">
+        <div class="card-title"><span class="card-icon">🔄</span> Mod 依赖库的特殊机制</div>
+        <p>Mod 类型的 JAR（放入 modlib 的库）如果在其 MANIFEST.MF 中声明了 <code>NAME</code> 和 <code>DIR</code> 属性，可以被其他插件通过 <code>SairLoader.getMOD_MEAT_INFFILE(name)</code> 获取其内部资源路径。</p>
+        <pre><code><span class="cmt">// MANIFEST.MF 示例</span>
+<span class="cmt">Manifest-Version: 1.0</span>
+<span class="kw">NAME</span>: <span class="typ">MyLib</span>;
+<span class="kw">DIR</span>: <span class="typ">sair/res/</span>;
+
+<span class="cmt">// 在其他插件中获取</span>
+<span class="typ">String</span> dir = <span class="typ">SairLoader</span>.<span class="fn">getMOD_MEAT_INFFILE</span>(<span class="str">"MyLib"</span>); <span class="cmt">// → "sair/res/"</span></code></pre>
+    </div>
+
+    <!-- 框架启动方式 -->
+    <h2 class="ani-fade-in-up ani-delay-1">🚀 框架启动方式</h2>
+
+    <div class="card ani-fade-in-up ani-delay-2">
+        <div class="card-title"><span class="card-icon">▶️</span> 三种启动方式</div>
+
+        <table class="doc-table">
+            <thead><tr><th>方式</th><th>说明</th></tr></thead>
+            <tbody>
+                <tr>
+                    <td><code>java -jar SFW.jar</code></td>
+                    <td>标准启动，打开控制台，自动执行 <code>autorun.ir</code></td>
+                </tr>
+                <tr>
+                    <td><code>java -jar SFW.jar "路径.ir"</code></td>
+                    <td>启动并自动执行指定的 IR 脚本文件</td>
+                </tr>
+                <tr>
+                    <td>双击 <code>.ir</code> 文件</td>
+                    <td>需先将 <code>.ir</code> 文件关联到 <code>run.bat</code>，双击即可启动并执行</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div class="info-box tip">
+            <div class="info-box-title">💡 Linux 用户</div>
+            <p>在 Linux 上需要手动将 .ir 文件路径传给 SFW.jar：<code>java -jar SFW.jar /path/to/script.ir</code></p>
+        </div>
+    </div>
+
+    <!-- 打印代理 -->
+    <h2 class="ani-fade-in-up ani-delay-1">📡 打印代理（PrintRunnable）</h2>
+
+    <div class="card ani-fade-in-up ani-delay-2">
+        <div class="card-title"><span class="card-icon">🔀</span> 拦截控制台输出</div>
+        <p>实现 <code>PrintRunnable</code> 接口可以拦截所有控制台输出，用于日志记录、远程转发等场景。</p>
+        <pre><code><span class="kw">public class</span> <span class="typ">MyLogger</span> <span class="kw">implements</span> <span class="typ">PrintRunnable</span> {
+    <span class="ann">@Override</span>
+    <span class="kw">public void</span> <span class="fn">run</span>(<span class="typ">Integer</span> index, <span class="typ">Color</span> c, <span class="typ">String</span> info) {
+        <span class="cmt">// 记录所有控制台输出</span>
+        <span class="typ">System</span>.out.<span class="fn">println</span>(<span class="str">"[LOG]"</span> + info);
+    }
+}
+
+<span class="cmt">// 注册打印代理</span>
+<span class="typ">SairCons</span>.<span class="fn">addPrintRunnable</span>(<span class="str">"myLogger"</span>, <span class="kw">new</span> <span class="typ">MyLogger</span>());
+
+<span class="cmt">// 也可以通过 SFW 命令注册</span>
+<span class="cmt">// /print-cpr className</span></code></pre>
+    </div>
+
+    <!-- 环境变量系统 -->
+    <h2 class="ani-fade-in-up ani-delay-1">🔧 环境变量系统</h2>
+
+    <div class="card ani-fade-in-up ani-delay-2">
+        <div class="card-title"><span class="card-icon">📝</span> 变量操作</div>
+        <table class="doc-table">
+            <thead><tr><th>命令</th><th>说明</th></tr></thead>
+            <tbody>
+                <tr><td><code>/var-add name value</code></td><td>设置变量（重复设置会覆盖）</td></tr>
+                <tr><td><code>/var-del name</code></td><td>删除变量</td></tr>
+                <tr><td><code>/var-list</code></td><td>列出所有变量</td></tr>
+            </tbody>
+        </table>
+        <p>预定义变量 <code>%irp%</code> 始终存在，初始值为空字符串。</p>
+        <p>代码中可通过 <code>ToolPack.getVmap()</code> 获取变量表。</p>
+    </div>
+
+    <!-- 中文编程支持 -->
+    <h2 class="ani-fade-in-up ani-delay-1">🏗️ 中文编程支持</h2>
+
+    <div class="card ani-fade-in-up ani-delay-2">
+        <div class="card-title"><span class="card-icon">🀄</span> 中文包名与类名</div>
+        <p>SairFramework 原生支持中文包名和类名。例如：</p>
+        <pre><code><span class="kw">package</span> <span class="typ">夏希尔.中文测试项目</span>;
+
+<span class="kw">import</span> <span class="typ">sair.user.Activity</span>;
+
+<span class="kw">public class</span> <span class="typ">测试组件主函数</span> <span class="kw">extends</span> <span class="typ">Activity</span> {
+    <span class="cmt">// ...</span>
+}</code></pre>
+        <p>配合 <code>plugins/modlib/中文代码组件支持包.jar</code> 可以实现全中文编程。</p>
+    </div>
+
+    <hr class="gradient-divider">
+
+    <div class="card ani-fade-in-up ani-delay-2" style="text-align:center;">
+        <div class="card-title" style="justify-content:center;">
+            <span class="card-icon">🎉</span> 文档到此结束
+        </div>
+        <p>祝你在 SairFramework 上的开发之旅顺利！</p>
+        <p style="color:var(--text-muted);font-size:0.85rem;">
+            如有问题，请联系 Sair（QQ: 1284688456）
+        </p>
+    </div>
+
+</div>
+<button class="back-to-top" onclick="window.scrollTo({top:0,behavior:'smooth'})" title="回到顶部">↑</button>
+<script>
+    const btn = document.querySelector('.back-to-top');
+    window.addEventListener('scroll', () => {
+        btn.classList.toggle('visible', window.scrollY > 400);
+    });
+</script>
+</body>
+</html>
