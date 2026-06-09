@@ -1,0 +1,41 @@
+/var-add 启动脚本文件 "./data/framework/autorun.ir"
+/var-add 暂停3秒 /sleep 3000
+/var-add 假 false
+/var-add 清屏 /clear
+/var-add 组件重命名 /rename
+/var-add 单线程脚本执行 /ir-i
+/var-add 头 播放器/功能名重定向
+
+%单线程脚本执行% %启动脚本文件%
+
+%清屏%
+
+%组件重命名% pl 播放器
+播放器/oset 功能名重定向 oset
+
+%头% 播放 start
+%头% 暂停 pause
+%头% 停止 stop
+%头% 列表 list
+
+%头% 添加到列表 add
+%头% 从列表移除 remove
+%头% 保存列表 savelist
+%头% 重新导入列表 reloadlist
+
+%头% 重新导入列表 reloadlist
+%头% 播放指定文件 playat
+%头% 打印歌曲 cp
+%头% 歌词时间偏移 lrcoffset
+%头% 歌词文件编码 lrccode
+
+%头% 取列表对象 getListToOvar
+%头% 现在播放的序号 getNowPlayID
+%头% 是否播放状态 isPlaying
+
+%暂停3秒%
+
+%清屏%
+
+播放器/打印歌曲 %假%
+播放器/列表

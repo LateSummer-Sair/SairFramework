@@ -1,0 +1,4 @@
+fans/setuid 33567111
+/clear
+fans/get
+/sleep 2000

@@ -1,0 +1,46 @@
+
+/TO:Start
+
+Start  {
+
+    Style  {
+        // 设置背景颜色为纯黑
+        /setBC 0 0 0
+
+        // 设置默认字体颜色 180 50 255
+        /setFC 180 50 255
+
+        // 设置帮助字体颜色 0 250 154
+        /setFCM ex-help 0 250 154
+
+        // 设置exection名字颜色 0 255 255
+        /setFCM ex 0 255 255
+
+        // 重新调整窗体大小[长1000,宽580]
+        /resize 1000 580
+
+        // 设置背景图 ./data/framework/BG.jpg
+        //setBG "./data/framework/BG.jpg"
+    }
+
+    Other  {
+        // 清屏
+       /clear
+
+        //打印消息头
+        /print-ti
+
+        // 打印帮助
+        /help
+    }
+    
+
+    // 隐藏窗体
+    /hide
+
+    /TO:Style
+    /TO:Other
+
+    // 显示窗体
+    /show
+}

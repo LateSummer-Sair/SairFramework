@@ -1,0 +1,8 @@
+scn/port 8060
+scn/start
+
+/sleep 100
+
+scn0/port 8060
+scn0/ip 127.0.0.1
+scn0/start
