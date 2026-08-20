@@ -1,0 +1,42 @@
+{
+  "_comment": "Harness 确定性约束配置（可选文件，缺失时回退代码内置默认值）。修改后由 ToolDispatcher 热加载（mtime 变化自动重载）。",
+  "permissionMatrix": {
+    "sendfile": "MASTER",
+    "block": "MASTER",
+    "unblock": "MASTER",
+    "delfriend": "MASTER",
+    "forwardmsg": "MASTER",
+    "sendgroupmsg": "MASTER",
+    "setaffection": "MASTER",
+    "recorddonation": "MASTER",
+    "setname": "MASTER",
+    "setsignature": "MASTER",
+    "ban": "GROUP_MASTER",
+    "kick": "GROUP_MASTER",
+    "muteall": "GROUP_MASTER",
+    "setadmin": "GROUP_MASTER",
+    "setgroupname": "GROUP_MASTER",
+    "leavegroup": "GROUP_MASTER",
+    "sendimage": "MEDIA",
+    "sendrecord": "MEDIA",
+    "sendlike": "MEDIA",
+    "relay": "MEDIA",
+    "sendfileto": "MEDIA",
+    "setcard": "AFFECTION:200",
+    "approvefriend": "AFFECTION:100",
+    "acceptgroupinvite": "AFFECTION:300"
+  },
+  "forbiddenCodePatterns": [
+    "processbuilder",
+    "runtime.getruntime",
+    "runtime.exec",
+    "system.exit",
+    "class.forname",
+    "file.delete",
+    "files.delete",
+    ".exec(",
+    "reflect"
+  ],
+  "maxResultLength": 12000,
+  "requireNonEmptyTools": ["web", "search", "readfile"]
+}
