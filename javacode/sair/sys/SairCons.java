@@ -140,11 +140,9 @@ public class SairCons {
 			// 打印代理在调用线程同步执行(保留原有实时语义)
 			runAgo(index, c, info);
 			ConsFrame.setTitleInfo("SFW的其他输出模式");
-			ConsFrame.flushPoint();
 		} else {
 			// 打印走批处理(内部攒批后在EDT统一flush,性能优化),滚动合并保持不变
 			ConsFrame.printo(index, c, info);
-			ConsFrame.flushPoint();
 		}
 	}
 

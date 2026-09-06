@@ -152,7 +152,6 @@ public class FrameActivity extends Activity {
 			return actions.newThread(args);
 
 		default:
-			ConsFrame.flushPoint();
 			// 修复:未知命令给一行提示(原实现静默返回,用户无法感知输入无效)
 			SairCons.println(FCM.Error_Color, "未知命令: " + (funcName == null ? "" : funcName.trim()) + " (输入/help查看帮助)");
 			return true;

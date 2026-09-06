@@ -11,7 +11,6 @@ import java.awt.Graphics2D;
 import java.awt.Image;
 import java.awt.LinearGradientPaint;
 import java.awt.MenuItem;
-import java.awt.Point;
 import java.awt.PopupMenu;
 import java.awt.Rectangle;
 import java.awt.SystemTray;
@@ -29,10 +28,9 @@ import javax.swing.JMenuItem;
 import javax.swing.JPopupMenu;
 import javax.swing.JTabbedPane;
 import javax.swing.JTextPane;
-import javax.swing.JViewport;
 import javax.swing.SwingConstants;
-import javax.swing.SwingUtilities;
 import javax.swing.text.BadLocationException;
+import javax.swing.text.DefaultCaret;
 import javax.swing.text.Document;
 import javax.swing.text.SimpleAttributeSet;
 import javax.swing.text.StyleConstants;
@@ -66,10 +64,11 @@ import javax.swing.JScrollPane;
  * <p>
  * <b>架构角色</b>
  * <ul>
- * <li>单例:公开字段 {@link #cf} 即唯一实例(构造器私有,类加载时静态初始化),窗口显隐不销毁;
- * 插件/IR脚本一律通过 ConsFrame 的静态方法操作控制台。</li>
+ * <li>单例:公开字段 {@link #cf} 即唯一实例(构造器私有,类加载时静态初始化),窗口显隐不销毁; 插件/IR脚本一律通过 ConsFrame
+ * 的静态方法操作控制台。</li>
  * <li>文本控制台:{@link #infoPane}(JTextPane)+{@link #centerScorllPane};所有打印经
- * {@link #printo(Integer, Color, String)} <b>调用线程直接插入</b>(直印模式,文档变更由 {@link #printLock} 串行化)。</li>
+ * {@link #printo(Integer, Color, String)} <b>调用线程直接插入</b>(直印模式,文档变更由
+ * {@link #printLock} 串行化)。</li>
  * <li>组件隔离区:{@link #tabsPane} 选项卡——printComponent 识别到画布/内部窗口/顶层窗口时入选项卡,
  * 与文本流完全隔离;其余子控件仍走 insertComponent 入文本流。</li>
  * <li>插件列表:{@link #listModel}/{@link #list}/{@link #listP_JSP},标题栏Sair按钮切换显隐,
@@ -92,13 +91,15 @@ import javax.swing.JScrollPane;
  * <li>公开字段 {@link #cf}、{@link #listModel}、{@link #list} 保持原样;可配置字段
  * {@link #MAX_CONSOLE_TEXT}、{@link #MAX_SINGLE_TEXT}、{@link #MAX_BATCH_PRINTS}、
  * {@link #MAX_CONSOLE_MEMORY} 为 public static,插件可运行时调参。</li>
- * <li>静态方法 printo/dePrinto/printComponent/getAllText/getPaneSize/close/setFontColor/
+ * <li>静态方法
+ * printo/dePrinto/printComponent/getAllText/getPaneSize/close/setFontColor/
  * setBackgroundColor/setImageBackground/setFrameOpacity/showFrame/hideFrame/setTitleInfo/playScanline/
- * flushPoint/runOnEDT/getTextPane/getFontColor/clearComponents 是插件打印/换肤入口,签名与语义保持稳定。</li>
+ * flushPoint/runOnEDT/getTextPane/getFontColor/clearComponents
+ * 是插件打印/换肤入口,签名与语义保持稳定。</li>
  * </ul>
  * <p>
- * <b>资源纪律</b>:背景图按"路径+修改时间+大小"缓存复用;颜色属性缓存 {@link #attrCache} 为256上限LRU;
- * 控制台按 {@link #MAX_CONSOLE_MEMORY} 内存预算裁剪最旧一半(防长跑OOM);滚动条UI实例复用
+ * <b>资源纪律</b>:背景图按"路径+修改时间+大小"缓存复用;颜色属性缓存 {@link #attrCache} 为256上限LRU; 控制台按
+ * {@link #MAX_CONSOLE_MEMORY} 内存预算裁剪最旧一半(防长跑OOM);滚动条UI实例复用
  * ({@link #scrollUIs}:[列表垂直,列表水平,主区垂直,主区水平],换色仅更新配色)。
  */
 public class ConsFrame extends SFrame {
@@ -131,18 +132,14 @@ public class ConsFrame extends SFrame {
 			return size() > 256;
 		}
 	};
+
 	/**
-	 * @deprecated 直印模式下不再攒批,该阈值仅保留作配置兼容(字段不可删,旧插件可能引用)
-	 */
-	@Deprecated
-	public static int MAX_BATCH_PRINTS = 2048;
-	/**
-	 * 控制台文档锁:串行化所有文档变更(insertString/remove/setText)与段计数,
-	 * 多线程直印不破坏 StyledDocument。
+	 * 控制台文档锁:串行化所有文档变更(insertString/remove/setText)与段计数, 多线程直印不破坏
+	 * StyledDocument。
 	 */
 	private static final Object printLock = new Object();
 	/** 自定义窗口标题(setTitleInfo设置):非null时框架不再自动恢复默认标题 */
-	//private static String customTitle = null;
+	// private static String customTitle = null;
 	/** 背景图解码缓存:换色/resize时直接复用,不重复解码 */
 	private static Image cachedBgImage;
 	/** 背景图缓存键:路径(或路径|修改时间|大小),用于判定文件是否变化需重新解码 */
@@ -157,8 +154,7 @@ public class ConsFrame extends SFrame {
 	/** 对应槽位UI是否已创建:首次setUI,之后仅setColors */
 	private final boolean[] scrollUIInited = new boolean[4];
 	/**
-	 * 控制台内存预算(估算字节,可配置):文本按每字符2字节,每段打印另计结构开销。
-	 * 超预算自动裁剪最旧一半(修复长跑OOM)。
+	 * 控制台内存预算(估算字节,可配置):文本按每字符2字节,每段打印另计结构开销。 超预算自动裁剪最旧一半(修复长跑OOM)。
 	 */
 	public static long MAX_CONSOLE_MEMORY = 64L * 1024L * 1024L;
 	/**
@@ -193,8 +189,7 @@ public class ConsFrame extends SFrame {
 	SButton exit = new SButton("Exit");
 	/**
 	 * 画布选项卡隔离区:printComponent 识别到画布(JPanel/Panel/Canvas)时自动新增一个选项卡;
-	 * 与文本流完全隔离,互不影响布局/复制/清屏。
-	 * 停靠位置:中心面板右侧(EAST,左侧为Sair按钮切换的输出列表),宽度可由用户拖动左侧手柄调整。
+	 * 与文本流完全隔离,互不影响布局/复制/清屏。 停靠位置:中心面板右侧(EAST,左侧为Sair按钮切换的输出列表),宽度可由用户拖动左侧手柄调整。
 	 */
 	JTabbedPane tabsPane = new JTabbedPane();
 	/**
@@ -203,8 +198,7 @@ public class ConsFrame extends SFrame {
 	 */
 	JPanel eastWrap = new JPanel();
 	/**
-	 * 拖动调宽手柄(6px竖条):悬浮显示左右箭头光标,按住拖动调整eastWrap宽度;
-	 * 自绘一条主色竖线与三点把手,与窗体描边风格一致。
+	 * 拖动调宽手柄(6px竖条):悬浮显示左右箭头光标,按住拖动调整eastWrap宽度; 自绘一条主色竖线与三点把手,与窗体描边风格一致。
 	 */
 	JPanel tabsGrip = new JPanel() {
 		private static final long serialVersionUID = 1L;
@@ -279,10 +273,10 @@ public class ConsFrame extends SFrame {
 	}
 
 	/**
-	 * 设置默认前景色(直印模式:调用线程直接重刷配色,立即生效);
-	 * 已设背景图时同时重设背景图以叠加新底色。
+	 * 设置默认前景色(直印模式:调用线程直接重刷配色,立即生效); 已设背景图时同时重设背景图以叠加新底色。
 	 *
-	 * @param c 新前景色
+	 * @param c
+	 *            新前景色
 	 */
 	public static final void setFontColor(final Color c) {
 		cf.otC = c;
@@ -319,36 +313,23 @@ public class ConsFrame extends SFrame {
 		cf.setFloat(f);
 	}
 
-	/**
-	 * @deprecated 已彻底弃用EDT调度:框架所有打印/配色/显隐/组件操作均改为调用线程直接执行。
-	 * 方法保留仅为二进制兼容,框架内部不再调用,新代码请勿使用。
-	 */
-	@Deprecated
-	public static final void runOnEDT(Runnable r) {
-		if (SwingUtilities.isEventDispatchThread())
-			r.run();
-		else
-			SwingUtilities.invokeLater(r);
-	}
+	// /**
+	// * @deprecated 已彻底弃用EDT调度:框架所有打印/配色/显隐/组件操作均改为调用线程直接执行。
+	// * 方法保留仅为二进制兼容,框架内部不再调用,新代码请勿使用。
+	// */
+	// @Deprecated
+	// public static final void runOnEDT(Runnable r) {
+	// if (SwingUtilities.isEventDispatchThread())
+	// r.run();
+	// else
+	// SwingUtilities.invokeLater(r);
+	// }
 
 	/**
-	 * <b>flashpoint(原版行为)</b>:每次 SFW 有输出内容就<b>强制</b>把视口滚动到最新位置(底部)。
-	 * 直印模式:调用线程直接执行。已恢复原版语义——不再做"用户上翻则不拉底"的容差判断,
-	 * 输出即强制刷新位置(哪怕用户正在向上翻阅历史)。
-	 */
-	public static final void flushPoint() {
-		JViewport vp = cf.centerScorllPane.getViewport();
-		if (vp == null || vp.getView() == null)
-			return;
-		int maxY = Math.max(0, vp.getView().getHeight() - vp.getViewRect().height);
-		vp.setViewPosition(new Point(0, maxY));
-	}
-
-	/**
-	 * 设置控制台背景色(直印模式:调用线程直接重刷配色,含选项卡内桌面区同步)。
-	 * 已设背景图时同时重设背景图以叠加新底色。
+	 * 设置控制台背景色(直印模式:调用线程直接重刷配色,含选项卡内桌面区同步)。 已设背景图时同时重设背景图以叠加新底色。
 	 *
-	 * @param c 新背景色
+	 * @param c
+	 *            新背景色
 	 */
 	public static final void setBackgroundColor(final Color c) {
 		cf.bgC = c;
@@ -358,10 +339,10 @@ public class ConsFrame extends SFrame {
 	}
 
 	/**
-	 * 设置背景图(直印模式:调用线程直接执行);
-	 * 传null或"null"清空背景;同一文件只解码一次(缓存键=路径|修改时间|大小)。
+	 * 设置背景图(直印模式:调用线程直接执行); 传null或"null"清空背景;同一文件只解码一次(缓存键=路径|修改时间|大小)。
 	 *
-	 * @param path 图片路径(可null=清空)
+	 * @param path
+	 *            图片路径(可null=清空)
 	 */
 	public static final void setImageBackground(final String path) {
 		setImageBackground0(path);
@@ -411,8 +392,8 @@ public class ConsFrame extends SFrame {
 	}
 
 	/**
-	 * 启动扫光特效(彩虹渐变光带扫过一次,鼠标穿透)。
-	 * 直印模式:不再用EDT Timer,改为后台守护线程驱动repaint(repaint线程安全),特效结束自动移除。
+	 * 启动扫光特效(彩虹渐变光带扫过一次,鼠标穿透)。 直印模式:不再用EDT
+	 * Timer,改为后台守护线程驱动repaint(repaint线程安全),特效结束自动移除。
 	 */
 	public static final void playScanline() {
 		if (scanlinePlayed)
@@ -442,13 +423,13 @@ public class ConsFrame extends SFrame {
 	}
 
 	/**
-	 * 设置自定义窗口标题(直印模式:调用线程直接执行);
-	 * customTitle非null期间不再自动恢复默认标题title_str。
+	 * 设置自定义窗口标题(直印模式:调用线程直接执行); customTitle非null期间不再自动恢复默认标题title_str。
 	 *
-	 * @param title 自定义标题
+	 * @param title
+	 *            自定义标题
 	 */
 	public static final void setTitleInfo(final String title) {
-		//customTitle = title;
+		// customTitle = title;
 		cf.setTitle(title);
 	}
 
@@ -458,13 +439,15 @@ public class ConsFrame extends SFrame {
 	 * <li>index==null → 追加到文本流尾部;</li>
 	 * <li>index!=null → 定位插入。</li>
 	 * </ul>
-	 * 调用线程直接执行(恢复旧版方式,不再攒批/不再派发EDT);
-	 * 文档变更在printLock内完成,多线程打印不会破坏StyledDocument。
+	 * 调用线程直接执行(恢复旧版方式,不再攒批/不再派发EDT); 文档变更在printLock内完成,多线程打印不会破坏StyledDocument。
 	 * c为null用当前默认前景色;text为null打印"null"。
 	 *
-	 * @param index 插入位置(null=尾部追加)
-	 * @param c     颜色(null=默认色)
-	 * @param text  文本(null容错)
+	 * @param index
+	 *            插入位置(null=尾部追加)
+	 * @param c
+	 *            颜色(null=默认色)
+	 * @param text
+	 *            文本(null容错)
 	 */
 	public static final void printo(final Integer index, final Color c, final String text) {
 		printo0(index, c, text);
@@ -513,11 +496,16 @@ public class ConsFrame extends SFrame {
 			}
 		}
 
+		// int point = cf.infoPane.getHeight();
+		/* JViewport vp = */
+		// cf.centerScorllPane.setVerticalScrollBarPolicy(point);
+		/*
+		 * if (vp != null) vp.setViewPosition(new Point(0, point));
+		 */
 	}
 
 	/**
-	 * 内存预算裁剪:估算 = 文本长度*2字节 + 段落数*每段结构开销。
-	 * 超预算时删除最旧一半文本(段计数按比例下调),控制台保留近期输出。
+	 * 内存预算裁剪:估算 = 文本长度*2字节 + 段落数*每段结构开销。 超预算时删除最旧一半文本(段计数按比例下调),控制台保留近期输出。
 	 */
 	private static void trimConsoleIfNeeded(Document docs) {
 		long estimate = (long) docs.getLength() * 2L + consoleSegments * PER_SEGMENT_BYTES;
@@ -541,8 +529,7 @@ public class ConsFrame extends SFrame {
 	}
 
 	/**
-	 * 控件输出(含类型识别,直印模式:调用线程直接执行):
-	 * 画布(JPanel/Panel/Canvas)→选项卡隔离区,每块画布一个选项卡;
+	 * 控件输出(含类型识别,直印模式:调用线程直接执行): 画布(JPanel/Panel/Canvas)→选项卡隔离区,每块画布一个选项卡;
 	 * 内部窗口(JInternalFrame)→桌面选项卡,保留标题栏/移动/最大化(真·窗口嵌套);
 	 * 顶层窗口(JFrame/JDialog等)→框架自动拆卸内容区(含菜单栏)入选项卡,旧插件零改动;
 	 * 其余子控件(JLabel/JButton等)→默认控制台,插入文本流(原insertComponent语义);
@@ -601,9 +588,8 @@ public class ConsFrame extends SFrame {
 	}
 
 	/**
-	 * 递归透明化(与主界面"全部Opaque=false"风格统一):
-	 * 把组件树内全部 JComponent 置为不透明 false,让暗色窗体背景透出,
-	 * 避免 LAF 默认浅色块破坏整体风格(仅处理 JComponent,AWT 组件无 opaque 语义)。
+	 * 递归透明化(与主界面"全部Opaque=false"风格统一): 把组件树内全部 JComponent 置为不透明
+	 * false,让暗色窗体背景透出, 避免 LAF 默认浅色块破坏整体风格(仅处理 JComponent,AWT 组件无 opaque 语义)。
 	 * 插件子组件自身绘制不受影响,只影响背景填充。
 	 */
 	private static void transparentTree(Component root) {
@@ -740,8 +726,10 @@ public class ConsFrame extends SFrame {
 	 * 打印一个文本标签:构造JLabel(颜色c、控制台字体)后走printComponent0,
 	 * 即作为子控件插入文本流(保持旧printComponent语义)。直印模式:调用线程直接执行。
 	 *
-	 * @param c           标签前景色(null=默认色)
-	 * @param labelString 标签文本
+	 * @param c
+	 *            标签前景色(null=默认色)
+	 * @param labelString
+	 *            标签文本
 	 */
 	public static final void printComponent(final Color c, final String labelString) {
 		Color local = c;
@@ -749,11 +737,11 @@ public class ConsFrame extends SFrame {
 			local = cf.otC;
 		JLabel lab = new JLabel();
 		lab.setText(labelString);
-		//lab.setEditable(false);
+		// lab.setEditable(false);
 		lab.setFont(cf.p_f);
 		lab.setForeground(local);
 		lab.setBorder(null);
-		//lab.setOpaque(false);
+		// lab.setOpaque(false);
 		printComponent0(lab);
 	}
 
@@ -764,11 +752,12 @@ public class ConsFrame extends SFrame {
 
 	/**
 	 * 删除控制台一段文本(直印模式:调用线程直接执行,printLock串行化):offs/len可null——
-	 * 两者皆null删末尾一个字符;offs为null从0开始;len为null或超长删到文档末尾。
-	 * 段计数按剩余比例同步下调。
+	 * 两者皆null删末尾一个字符;offs为null从0开始;len为null或超长删到文档末尾。 段计数按剩余比例同步下调。
 	 *
-	 * @param offs 起始偏移(null容错)
-	 * @param len  删除长度(null容错)
+	 * @param offs
+	 *            起始偏移(null容错)
+	 * @param len
+	 *            删除长度(null容错)
 	 */
 	public static final void dePrinto(final Integer offs, final Integer len) {
 		dePrinto0(offs, len);
@@ -986,8 +975,7 @@ public class ConsFrame extends SFrame {
 	}
 
 	/**
-	 * 标签区右键菜单配色与主界面统一(背景/前景/字体/边框,仅EDT调用)。
-	 * 菜单项为框架创建的JMenuItem,直接按主题色套用。
+	 * 标签区右键菜单配色与主界面统一(背景/前景/字体/边框,仅EDT调用)。 菜单项为框架创建的JMenuItem,直接按主题色套用。
 	 */
 	private void styleTabPopup() {
 		if (tabPopup == null)
@@ -1039,8 +1027,7 @@ public class ConsFrame extends SFrame {
 			@Override
 			public void mouseDragged(java.awt.event.MouseEvent e) {
 				int delta = gripStartX - e.getXOnScreen();
-				tabsWidth = Math.max(TABS_MIN_W,
-						Math.min((int) (cf.getWidth() * 0.7f), gripStartW + delta));
+				tabsWidth = Math.max(TABS_MIN_W, Math.min((int) (cf.getWidth() * 0.7f), gripStartW + delta));
 				eastWrap.setPreferredSize(new Dimension(tabsWidth, 0));
 				centerPanel.revalidate();
 				centerPanel.repaint();
@@ -1100,6 +1087,9 @@ public class ConsFrame extends SFrame {
 		titlePanel.add(exit, BorderLayout.EAST);
 		titlePanel.add(title, BorderLayout.CENTER);
 
+
+		DefaultCaret dc = (DefaultCaret) infoPane.getCaret();
+		dc.setUpdatePolicy(DefaultCaret.ALWAYS_UPDATE);
 		centerScorllPane.setViewportView(infoPane);
 
 		centerPanel.add(inputPanel, BorderLayout.SOUTH);
