@@ -21,8 +21,6 @@ import java.awt.event.ActionListener;
 import java.awt.event.KeyEvent;
 import java.io.File;
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.HashMap;
 
 import javax.swing.JDesktopPane;
 import javax.swing.JInternalFrame;
@@ -34,7 +32,6 @@ import javax.swing.JTextPane;
 import javax.swing.JViewport;
 import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
-import javax.swing.Timer;
 import javax.swing.text.BadLocationException;
 import javax.swing.text.Document;
 import javax.swing.text.SimpleAttributeSet;
@@ -124,12 +121,6 @@ public class ConsFrame extends SFrame {
 	 * 单次插入文本长度上限(字符):超过时拒绝插入(可配置,安全加固)
 	 */
 	public static int MAX_SINGLE_TEXT = 32 * 1024 * 1024;
-	/**
-	 * 自动滚动判定容差(像素):视口距底部小于该值时跟随滚动(P11)
-	 */
-	private static final int SCROLL_TOLERANCE = 10;
-	/** 最近一次自动滚动后的视口底部Y,用于判断"是否跟随滚动" */
-	private static int lastViewMax = 0;
 	// 修复:颜色属性缓存改LRU(上限256),随机颜色打印不再无界增长
 	private static final java.util.LinkedHashMap<Color, SimpleAttributeSet> attrCache = new java.util.LinkedHashMap<Color, SimpleAttributeSet>(
 			16, 0.75f, true) {
@@ -151,7 +142,7 @@ public class ConsFrame extends SFrame {
 	 */
 	private static final Object printLock = new Object();
 	/** 自定义窗口标题(setTitleInfo设置):非null时框架不再自动恢复默认标题 */
-	private static String customTitle = null;
+	//private static String customTitle = null;
 	/** 背景图解码缓存:换色/resize时直接复用,不重复解码 */
 	private static Image cachedBgImage;
 	/** 背景图缓存键:路径(或路径|修改时间|大小),用于判定文件是否变化需重新解码 */
@@ -341,11 +332,16 @@ public class ConsFrame extends SFrame {
 	}
 
 	/**
-	 * 控制台自动滚动(直印模式:调用线程直接执行,不再合并/派发EDT)。
-	 * 用户上翻阅读历史时不强制拉底(判定见flushSelect)。
+	 * <b>flashpoint(原版行为)</b>:每次 SFW 有输出内容就<b>强制</b>把视口滚动到最新位置(底部)。
+	 * 直印模式:调用线程直接执行。已恢复原版语义——不再做"用户上翻则不拉底"的容差判断,
+	 * 输出即强制刷新位置(哪怕用户正在向上翻阅历史)。
 	 */
 	public static final void flushPoint() {
-		flushSelect();
+		JViewport vp = cf.centerScorllPane.getViewport();
+		if (vp == null || vp.getView() == null)
+			return;
+		int maxY = Math.max(0, vp.getView().getHeight() - vp.getViewRect().height);
+		vp.setViewPosition(new Point(0, maxY));
 	}
 
 	/**
@@ -452,7 +448,7 @@ public class ConsFrame extends SFrame {
 	 * @param title 自定义标题
 	 */
 	public static final void setTitleInfo(final String title) {
-		customTitle = title;
+		//customTitle = title;
 		cf.setTitle(title);
 	}
 
@@ -1006,22 +1002,6 @@ public class ConsFrame extends SFrame {
 				mi.setForeground(otC);
 				mi.setBackground(bgC);
 			}
-		}
-	}
-
-	/** EDT上的自动滚动:已贴底且内容高度未变则跳过;距底部小于容差(或内容缩短越界)才跟随滚动 */
-	private static void flushSelect() {
-		JViewport vp = cf.centerScorllPane.getViewport();
-		int maxY = Math.max(0, vp.getView().getHeight() - vp.getViewRect().height);
-		int curY = vp.getViewPosition().y;
-		// 微优化:已位于底部且内容高度未变化时直接返回,跳过滚动调用
-		if (curY == maxY && lastViewMax == maxY)
-			return;
-		// 视口距底部小于容差(或内容缩短导致越界)时才跟随滚动,用户上翻阅读历史时不强制拉底
-		boolean follow = curY >= lastViewMax - SCROLL_TOLERANCE || curY > maxY;
-		if (follow) {
-			vp.setViewPosition(new Point(0, maxY));
-			lastViewMax = maxY;
 		}
 	}
 
