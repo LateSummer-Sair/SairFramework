@@ -8,17 +8,41 @@ import sair.Pathes;
 import sair.sys.SairCons;
 import sair.user.Activity;
 
+/**
+ * æ¡†æ¶å‘½ä»¤åˆ†å‘å™¨:æŠŠè§£é‡Šå™¨ä¸‹å‘çš„ funcName åˆ†å‘åˆ° FrameActivity_Actions çš„å…·ä½“å®ç°,å¹¶ç»´æŠ¤ /help å¸®åŠ©æ–‡æœ¬ã€‚
+ * <p>
+ * æ¶æ„è§’è‰²:sair.user.Activity å­ç±»,å®ä¾‹å³ {@link ConsFrame#fa}(æ³¨å†Œä¸ºæ¡†æ¶ç»„ä»¶)ã€‚main æŒ‰ funcName switch:
+ * GUIå®šåˆ¶å‘½ä»¤(setBG/setFC/â€¦)ã€ç»„ä»¶å±•ç¤º(list/list-s)ã€æ‰“å°(print/println/deprint/clear/print-f/â€¦)ã€
+ * çª—ä½“è‡ªèº«(hide/show/resize)ã€è„šæœ¬(ir/ir-x/ir-i)ã€è§£é‡Šå™¨/å˜é‡/çº¿ç¨‹ç­‰;æœªçŸ¥å‘½ä»¤è¾“å‡ºä¸€è¡Œé”™è¯¯æç¤º
+ * (æç¤ºè¾“å…¥/helpæŸ¥çœ‹å¸®åŠ©,åŸå®ç°é™é»˜è¿”å›)ã€‚
+ * <p>
+ * çº¿ç¨‹æ¨¡å‹(å·²å½»åº•å¼ƒç”¨EDTè°ƒåº¦):main å¯èƒ½è¢«è§£é‡Šå™¨åœ¨å·¥ä½œçº¿ç¨‹æˆ–AWTäº‹ä»¶å›è°ƒä¸­è°ƒç”¨,
+ * æœ¬ç±»æ— å…±äº«å¯å˜çŠ¶æ€(actions æ¯æ¬¡åˆ†å‘ç°è°ƒ),å‘½ä»¤ç”±è°ƒç”¨çº¿ç¨‹ç›´æ¥æ‰§è¡Œ(æ¢å¤æ—§ç‰ˆæ–¹å¼)ã€‚
+ * /clear åªæ¸…ç©ºæ§åˆ¶å°æ–‡æœ¬,ä¸å½±å“ç”»å¸ƒé€‰é¡¹å¡éš”ç¦»åŒº(éš”ç¦»åŒºç”±å³é”®èœå•/clearComponentsç®¡ç†)ã€‚
+ * <p>
+ * äºŒè¿›åˆ¶å…¼å®¹:å…¬å¼€å­—æ®µ {@link #version} ä¸é‡å†™æ–¹æ³•ç­¾å(main/help/exit/dataDir/o_funcMain)ä¿æŒç¨³å®š;
+ * å‘½ä»¤åç§°(caseå­—ç¬¦ä¸²)å³æ’ä»¶å¯¹å¤–æ¥å£,ä¸å¯æ”¹åã€‚
+ */
 public class FrameActivity extends Activity {
 
+	/** ç‰ˆæœ¬æ˜¾ç¤ºä¸²(helpå¤´éƒ¨ä½¿ç”¨) */
 	public final String version = "version:" + Main.Version;
 	private final FrameActivity_Actions actions = new FrameActivity_Actions();
 
+	/**
+	 * å‘½ä»¤åˆ†å‘å…¥å£:æŒ‰ funcName åˆ†å‘åˆ° actions çš„å®ç°;æ‰€æœ‰åˆ†æ”¯è¿”å›énullç»“æœã€‚
+	 * æœªçŸ¥å‘½ä»¤èµ°default:å…ˆflushPoint(æ»šåŠ¨è´´åº•)å†æ‰“å°ä¸€è¡Œé”™è¯¯æç¤ºã€‚
+	 *
+	 * @param funcName å‘½ä»¤å(å¦‚"print"/"load")
+	 * @param args     å‘½ä»¤å‚æ•°åŸæ–‡
+	 * @return å„å‘½ä»¤çš„æ‰§è¡Œç»“æœ(å¤šæ•°ä¸ºBoolean)
+	 */
 	@Override
 	public Object main(String funcName, String args) {
 
 		switch (funcName) {
 
-		// GUI ×Ô¶¨ÒåÃüÁî
+		// GUI è‡ªå®šä¹‰å‘½ä»¤
 		case "setBG":
 			return actions.setBG(args);
 		case "setFC":
@@ -27,17 +51,22 @@ public class FrameActivity extends Activity {
 			return actions.setColor(false, args);
 		case "setFCM":
 			return actions.setFCMColor(args);
+		case "opacity":
+			return actions.opacity(args);
+		case "load":
+			return actions.load(args);
 
-		// ×é¼şÕ¹Ê¾ÃüÁî
+		// ç»„ä»¶å±•ç¤ºå‘½ä»¤
 		case "list":
 			return actions.showList(false);
 		case "list-s":
 			return actions.showList(true);
 
-		// ´òÓ¡ÃüÁî
+		// æ‰“å°å‘½ä»¤
 		case "deprint":
 			return actions.deprint(args);
 		case "clear": {
+			// åªæ¸…æ§åˆ¶å°æ–‡æœ¬,ä¸å½±å“å³ä¾§ç”»å¸ƒé€‰é¡¹å¡éš”ç¦»åŒº(éš”ç¦»åŒºç”±å³é”®èœå•ç®¡ç†)
 			SairCons.clear();
 			return true;
 		}
@@ -56,7 +85,7 @@ public class FrameActivity extends Activity {
 			return actions.printti();
 		case "print-cpr":
 			return actions.printcpr(args);
-		// ´°Ìå×ÔÉíÃüÁî
+		// çª—ä½“è‡ªèº«å‘½ä»¤
 		case "hide": {
 			ConsFrame.hideFrame();
 			return true;
@@ -74,7 +103,7 @@ public class FrameActivity extends Activity {
 			return true;
 		}
 
-		// ½Å±¾¶ÁÈ¡ÃüÁî
+		// è„šæœ¬è¯»å–å‘½ä»¤
 		case "ir": {
 			try {
 				actions.ir(args);
@@ -84,13 +113,13 @@ public class FrameActivity extends Activity {
 			return true;
 		}
 
-		// ½Å±¾Í£Ö¹ÃüÁî
+		// è„šæœ¬åœæ­¢å‘½ä»¤
 		case "ir-x": {
 			actions.irstop(args);
 			return true;
 		}
 
-		// ½Å±¾×èÈûÊ½ÃüÁî
+		// è„šæœ¬é˜»å¡å¼å‘½ä»¤
 		case "ir-i": {
 			try {
 				actions.iri(args);
@@ -100,15 +129,15 @@ public class FrameActivity extends Activity {
 			return true;
 		}
 
-		// ½âÊÍÆ÷ÉèÖÃ
+		// è§£é‡Šå™¨è®¾ç½®
 		case "setspliter":
 			return actions.setSpliter(args);
 
-		// ×é¼şÖØÃüÃû
+		// ç»„ä»¶é‡å‘½å
 		case "rename":
 			return actions.renameActi(args);
 
-		// ±äÁ¿³Ø²Ù×÷£º
+		// å˜é‡æ± æ“ä½œï¼š
 		case "var-add":
 			return actions.addVar(args);
 		case "var-del":
@@ -116,7 +145,7 @@ public class FrameActivity extends Activity {
 		case "var-list":
 			return actions.listVar();
 
-		// Ïß³Ì²Ù×÷£º
+		// çº¿ç¨‹æ“ä½œï¼š
 		case "sleep":
 			return actions.sleep(args);
 		case "newthread":
@@ -124,69 +153,87 @@ public class FrameActivity extends Activity {
 
 		default:
 			ConsFrame.flushPoint();
+			// ä¿®å¤:æœªçŸ¥å‘½ä»¤ç»™ä¸€è¡Œæç¤º(åŸå®ç°é™é»˜è¿”å›,ç”¨æˆ·æ— æ³•æ„ŸçŸ¥è¾“å…¥æ— æ•ˆ)
+			SairCons.println(FCM.Error_Color, "æœªçŸ¥å‘½ä»¤: " + (funcName == null ? "" : funcName.trim()) + " (è¾“å…¥/helpæŸ¥çœ‹å¸®åŠ©)");
 			return true;
 		}
 
 	}
 
+	/**
+	 * å¸®åŠ©æ–‡æœ¬:è§£é‡Šå™¨åœ¨è¾“å…¥/helpæ—¶é€è¡Œæ‰“å°;å†…å®¹å³å…¨éƒ¨æ¡†æ¶GUIå‘½ä»¤çš„ç”¨æ³•è¯´æ˜ã€‚
+	 *
+	 * @return å¸®åŠ©æ–‡æœ¬è¡Œæ•°ç»„
+	 */
 	@Override
 	public String[] help() {
 		return new String[] { //
 				Pathes.printSplit, //
 				version, //
-				"(Ë«ÒıºÅÊÇÂ·¾¶¹Ø¼ü¶Ô£¬µ¥ÒıºÅÊÇÃüÁîÖ´ĞĞ·µ»Ø¹Ø¼ü¶Ô£¬Çë±ÜÃâ³£¹æÃüÁîÊ¹ÓÃÕâÁ½¶Ô×é)", //
-				"{/help £¨Í¨ÓÃÃüÁî£©²é¿´°ïÖú}	"//
-						+ "{/exit £¨Í¨ÓÃÃüÁî£©½áÊø}	", //
-				"{/info £¨Í¨ÓÃÃüÁî£©²é¿´×é¼şdataºÍjarÎÄ¼şÀ´Ô´}	", //
-				"{/ofunc '[cmd]' £¨Í¨ÓÃÃüÁî£© ÓÅÏÈÖ´ĞĞµ¥À¨ºÅÄÚµÄÃüÁî·µ»Øµ½ÖØĞ´µÄo_funcMain·½·¨}	", //
-				"{/oset [newFucName] [oldFuncName]£¨Í¨ÓÃÃüÁî£© ĞÂ½¨Ò»¸ö×é¼şÄÚÖ¸Áî¶ÔÓ¦¾ÉÖ¸Áî£¨¾ÉÖ¸ÁîÈÎÈ»¿ÉÒÔÊ¹ÓÃ£©}	", //
-				"{/orem [newFucName]£¨Í¨ÓÃÃüÁî£© ÒÆ³ıµôĞÂÔöµÄÖ¸Áî´úÌæ}	", //
-				"{/close | open £¨Í¨ÓÃÃüÁî£©¹Ø±Õ»òÕß´ò¿ªÃüÁî´«Èëµ½Ö¸¶¨×é¼ş}", //
+				"(åŒå¼•å·æ˜¯è·¯å¾„å…³é”®å¯¹ï¼Œå•å¼•å·æ˜¯å‘½ä»¤æ‰§è¡Œè¿”å›å…³é”®å¯¹ï¼Œè¯·é¿å…å¸¸è§„å‘½ä»¤ä½¿ç”¨è¿™ä¸¤å¯¹ç»„)", //
+				"{/help ï¼ˆé€šç”¨å‘½ä»¤ï¼‰æŸ¥çœ‹å¸®åŠ©}	"//
+						+ "{/exit ï¼ˆé€šç”¨å‘½ä»¤ï¼‰ç»“æŸ}	", //
+						"{/uninstall ï¼ˆé€šç”¨å‘½ä»¤ï¼‰å¸è½½å¹¶ç§»é™¤è¯¥æ’ä»¶(é‡Šæ”¾jaræ–‡ä»¶å ç”¨)}	", //
+				"{/info ï¼ˆé€šç”¨å‘½ä»¤ï¼‰æŸ¥çœ‹ç»„ä»¶dataå’Œjaræ–‡ä»¶æ¥æº}	", //
+				"{/ofunc '[cmd]' ï¼ˆé€šç”¨å‘½ä»¤ï¼‰ ä¼˜å…ˆæ‰§è¡Œå•æ‹¬å·å†…çš„å‘½ä»¤è¿”å›åˆ°é‡å†™çš„o_funcMainæ–¹æ³•}	", //
+				"{/oset [newFucName] [oldFuncName]ï¼ˆé€šç”¨å‘½ä»¤ï¼‰ æ–°å»ºä¸€ä¸ªç»„ä»¶å†…æŒ‡ä»¤å¯¹åº”æ—§æŒ‡ä»¤ï¼ˆæ—§æŒ‡ä»¤ä»»ç„¶å¯ä»¥ä½¿ç”¨ï¼‰}	", //
+				"{/orem [newFucName]ï¼ˆé€šç”¨å‘½ä»¤ï¼‰ ç§»é™¤æ‰æ–°å¢çš„æŒ‡ä»¤ä»£æ›¿}	", //
+				"{/close | open ï¼ˆé€šç”¨å‘½ä»¤ï¼‰å…³é—­æˆ–è€…æ‰“å¼€å‘½ä»¤ä¼ å…¥åˆ°æŒ‡å®šç»„ä»¶}", //
 				Pathes.printSplit, //
-				"/clear ÇåÆÁÃüÁî", //
-				"/println | print | deprint´òÓ¡ÃüÁî£¬¿É¼Ó-c½øĞĞÑÕÉ«´òÓ¡,-fÊä³öÍ¼Æ¬ÎÄ¼ş(ÎŞ·¨Ê¶±ğÖ»»áÊä³öÂ·¾¶)", //
-				"/print-ti ÔòÊÇ´òÓ¡ÏûÏ¢Í·,¿ÉÒÔÔÚÇåÆÁºóÊ¹ÓÃ", "\tÀı¾Ù£º /print-c 255 0 0 [args]", //
-				"\tÀı¾Ù£º/print [args]", //
-				"\tÀı¾Ù£º/deprint 0 256 | /deprint max max", //
-				"print-cpr [name] Çå³ıµÚÈı·½Êä³öÄ£Ê½,Èç¹ûnameÁô¿Õ,ÄÇÃ´½«»áÇå³ıËùÓĞÊä³öÄ£Ê½·½°¸",
-				"/setBG [path] ÉèÖÃ±³¾°Í¼Æ¬£¬pathÒ»¶¨ĞèÒªË«ÒıºÅ·ñÔòÎŞ·¨Ê¶±ğÂ·¾¶£¡", //
-				"/setBC [RGB] | setFC [RGB]ÉèÖÃ±³¾°ÑÕÉ«ÓëÉèÖÃÄ¬ÈÏ´òÓ¡×ÖÌåÑÕÉ«£¨°üÀ¨±ß¿òÑÕÉ«ºÍ´°ÌåÔªËØÑÕÉ«£©", //
-				"/setFCM [target] [RGB] ÉèÖÃFCMÖĞµÄ¸÷ÖÖ²ÎÊıÑÕÉ«£¬ĞèÒª×é¼şÒıÓÃ´ËÑÕÉ«ÊµÏÖÍ³Ò»£¡", //
-				"\ttarget: ¿ÉÉèÖÃ²ÎÊıÓĞ ui-error£¬ex-help£¬ex-info£¬ex£¬mod", //
-				"\t·Ö±ğÊÇ: ´íÎóÏûÏ¢µÄÏÔÊ¾ÑÕÉ«£¬°ïÖúÏûÏ¢µÄÏÔÊ¾ÑÕÉ«£¬", //
-				"\t\t×é¼şinfoÃüÁî´¥·¢µÄÏÔÊ¾ÑÕÉ«£¬×é¼şÃû»òÕßmodÃûÏÔÊ¾ÑÕÉ«", //
-				"/list ²é¿´ÒÑ¾­¼ÓÔØµÄËùÓĞplugin£¬¿ÉÒÔ¼Ó-s½øĞĞ²é¿´exectionµÄÏêÏ¸ĞÅÏ¢", //
-				"\t¾ÙÀı£º/list-s", //
-				"/ir [path] ½Å±¾Ö´ĞĞ", //
-				"/ir-x [path] ½Å±¾Í£Ö¹", //
-				"/ir-i [path] Ê¹ÓÃµ±Ç°Ïß³ÌÖ´ĞĞir(ÈÎÎñ¹ı³¤»áµ¼ÖÂµ±Ç°Ïß³Ì×èÈû)", //
-				"/hide | show Òş²ØºÍÏÔÊ¾Ç°Ì¨¿ØÖÆÌ¨", //
-				"/setspliter [className] ÇĞ»»¿ØÖÆÌ¨½âÊÍÆ÷µ½Ö¸¶¨½âÊÍÆ÷", //
-				"\t×¢ÊÍ£ºspliter¹ÜÀíÆ÷ĞèÒª¼Ì³Ğ×Ô³éÏóÀàsair.user.SpliterSPI", //
-				"/rename [old_name] [new_name] ÖØÃüÃûexection×é¼ş", //
-				"/var-add [name] [string] ÉèÖÃ»·¾³±äÁ¿Öµ", //
-				"/var-del [name] É¾³ı»·¾³±äÁ¿Öµ", //
-				"\tÌí¼ÓºóÓÃ·¨Ö»´æÔÚÏµÍ³½âÊÍÆ÷ÖĞ£º±ÈÈçÌí¼ÓÃû×ÖÎªvarµÄ±äÁ¿£¬ÄÇÃ´Ö±½ÓÔÚÃüÁîÊäÈë¿òÊäÈëº¬", //
-				"\t%var%µÄ×Ö·û´®¾ÍÄÜ±»½âÊÍÆ÷×Ô¶¯´úÌæ³É[string]µÄÖµ", //
-				"\tÖØ¸´var-addÏàÍ¬±äÁ¿Ãû»áÇ¿ÖÆ¸ü¸ÄÒÑÓĞµÄÖµ", //
-				"/var-list ²é¿´ËùÓĞÒÑ¾­ÉèÖÃµÄ±äÁ¿", //
-				"/sleep [time] Ïß³ÌË¯Ãß:timeÎªºÁÃëÊı", //
-				"/newthread [cmd]ÒÔ¶ÀÁ¢µÄĞÂÏß³ÌĞÎÊ½ÅÜÃüÁî(²»Ê¹ÓÃÏß³Ì³Ø)", //
-				"/resize [w] [h] ÖØĞÂÉèÖÃ´°Ìå³¤¿í£¬Èç¹ûresizeÎŞ²ÎÊıÔò¾ÍÊÇÄ¬ÈÏ´óĞ¡", //
+				"/clear æ¸…å±å‘½ä»¤", //
+				"/println | print | deprintæ‰“å°å‘½ä»¤ï¼Œå¯åŠ -cè¿›è¡Œé¢œè‰²æ‰“å°,-fè¾“å‡ºå›¾ç‰‡æ–‡ä»¶(æ— æ³•è¯†åˆ«åªä¼šè¾“å‡ºè·¯å¾„)", //
+				"/print-ti åˆ™æ˜¯æ‰“å°æ¶ˆæ¯å¤´,å¯ä»¥åœ¨æ¸…å±åä½¿ç”¨", "\tä¾‹ä¸¾ï¼š /print-c 255 0 0 [args]", //
+				"\tä¾‹ä¸¾ï¼š/print [args]", //
+				"\tä¾‹ä¸¾ï¼š/deprint 0 256 | /deprint max max", //
+				"print-cpr [name] æ¸…é™¤ç¬¬ä¸‰æ–¹è¾“å‡ºæ¨¡å¼,å¦‚æœnameç•™ç©º,é‚£ä¹ˆå°†ä¼šæ¸…é™¤æ‰€æœ‰è¾“å‡ºæ¨¡å¼æ–¹æ¡ˆ",
+				"/setBG [path] è®¾ç½®èƒŒæ™¯å›¾ç‰‡ï¼Œpathä¸€å®šéœ€è¦åŒå¼•å·å¦åˆ™æ— æ³•è¯†åˆ«è·¯å¾„ï¼", //
+				"/opacity [10-100] è®¾ç½®çª—å£ä¸é€æ˜åº¦(100=å®Œå…¨ä¸é€æ˜,JDK8åå°„/JDK10+ç›´æ¥API)", //
+				"/load [path|url] ä»å…¶ä»–ä½ç½®åŠ è½½æ’ä»¶jar(æ”¯æŒæœ¬åœ°è·¯å¾„ä¸http/https/file URL)", //
+				"/setBC [RGB] | setFC [RGB]è®¾ç½®èƒŒæ™¯é¢œè‰²ä¸è®¾ç½®é»˜è®¤æ‰“å°å­—ä½“é¢œè‰²ï¼ˆåŒ…æ‹¬è¾¹æ¡†é¢œè‰²å’Œçª—ä½“å…ƒç´ é¢œè‰²ï¼‰", //
+				"/setFCM [target] [RGB] è®¾ç½®FCMä¸­çš„å„ç§å‚æ•°é¢œè‰²ï¼Œéœ€è¦ç»„ä»¶å¼•ç”¨æ­¤é¢œè‰²å®ç°ç»Ÿä¸€ï¼", //
+				"\ttarget: å¯è®¾ç½®å‚æ•°æœ‰ ui-errorï¼Œex-helpï¼Œex-infoï¼Œexï¼Œmod", //
+				"\tåˆ†åˆ«æ˜¯: é”™è¯¯æ¶ˆæ¯çš„æ˜¾ç¤ºé¢œè‰²ï¼Œå¸®åŠ©æ¶ˆæ¯çš„æ˜¾ç¤ºé¢œè‰²ï¼Œ", //
+				"\t\tç»„ä»¶infoå‘½ä»¤è§¦å‘çš„æ˜¾ç¤ºé¢œè‰²ï¼Œç»„ä»¶åæˆ–è€…modåæ˜¾ç¤ºé¢œè‰²", //
+				"/list æŸ¥çœ‹å·²ç»åŠ è½½çš„æ‰€æœ‰pluginï¼Œå¯ä»¥åŠ -sè¿›è¡ŒæŸ¥çœ‹exectionçš„è¯¦ç»†ä¿¡æ¯", //
+				"\tä¸¾ä¾‹ï¼š/list-s", //
+				"/ir [path] è„šæœ¬æ‰§è¡Œ", //
+				"/ir-x [path] è„šæœ¬åœæ­¢", //
+				"/ir-i [path] ä½¿ç”¨å½“å‰çº¿ç¨‹æ‰§è¡Œir(ä»»åŠ¡è¿‡é•¿ä¼šå¯¼è‡´å½“å‰çº¿ç¨‹é˜»å¡)", //
+				"/hide | show éšè—å’Œæ˜¾ç¤ºå‰å°æ§åˆ¶å°", //
+				"/setspliter [className] åˆ‡æ¢æ§åˆ¶å°è§£é‡Šå™¨åˆ°æŒ‡å®šè§£é‡Šå™¨", //
+				"\tæ³¨é‡Šï¼šspliterç®¡ç†å™¨éœ€è¦ç»§æ‰¿è‡ªæŠ½è±¡ç±»sair.user.SpliterSPI", //
+				"/rename [old_name] [new_name] é‡å‘½åexectionç»„ä»¶", //
+				"/var-add [name] [string] è®¾ç½®ç¯å¢ƒå˜é‡å€¼", //
+				"/var-del [name] åˆ é™¤ç¯å¢ƒå˜é‡å€¼", //
+				"\tæ·»åŠ åç”¨æ³•åªå­˜åœ¨ç³»ç»Ÿè§£é‡Šå™¨ä¸­ï¼šæ¯”å¦‚æ·»åŠ åå­—ä¸ºvarçš„å˜é‡ï¼Œé‚£ä¹ˆç›´æ¥åœ¨å‘½ä»¤è¾“å…¥æ¡†è¾“å…¥å«", //
+				"\t%var%çš„å­—ç¬¦ä¸²å°±èƒ½è¢«è§£é‡Šå™¨è‡ªåŠ¨ä»£æ›¿æˆ[string]çš„å€¼", //
+				"\té‡å¤var-addç›¸åŒå˜é‡åä¼šå¼ºåˆ¶æ›´æ”¹å·²æœ‰çš„å€¼", //
+				"/var-list æŸ¥çœ‹æ‰€æœ‰å·²ç»è®¾ç½®çš„å˜é‡", //
+				"/sleep [time] çº¿ç¨‹ç¡çœ :timeä¸ºæ¯«ç§’æ•°", //
+				"/newthread [cmd]ä»¥ç‹¬ç«‹çš„æ–°çº¿ç¨‹å½¢å¼è·‘å‘½ä»¤(ä¸ä½¿ç”¨çº¿ç¨‹æ± )", //
+				"/resize [w] [h] é‡æ–°è®¾ç½®çª—ä½“é•¿å®½ï¼Œå¦‚æœresizeæ— å‚æ•°åˆ™å°±æ˜¯é»˜è®¤å¤§å°", //
 
 		};
 	}
 
+	/** é€€å‡ºæ¡†æ¶:/exitä¸æ‰˜ç›˜exitèœå•æœ€ç»ˆèµ°è¿™é‡Œ â†’ ConsFrame.close() â†’ System.exit(0) */
 	@Override
 	public void exit() {
 		ConsFrame.close();
 	}
 
+	/** ç»„ä»¶æ•°æ®ç›®å½•å("framework"):ä¸Pathes.dataResDiræ‹¼å‡ºæœ¬ç»„ä»¶çš„æŒä¹…åŒ–ç›®å½• */
 	@Override
 	protected String dataDir() {
 		return "framework";
 	}
 
+	/**
+	 * ofuncå›è°ƒå…¥å£(/ofunc '[cmd]' è§¦å‘):æ‰“å°å¯¹è±¡ç±»åä¸å€¼å¹¶åŸæ ·è¿”å›ã€‚
+	 *
+	 * @param o å›è°ƒä¼ å…¥çš„å¯¹è±¡(å¯null)
+	 * @return åŸå¯¹è±¡
+	 */
 	public Object o_funcMain(Object o) {
 		if (o == null)
 			return null;

@@ -1,115 +1,70 @@
 package sair.sys;
 
-import java.io.File;
-import java.util.ArrayList;
-
-import sair.Main;
-import sair.Pathes;
-import sair.sys.tools.ToolPack;
-
+/**
+ * 平台/运行环境探测:缓存 java.version/java.home/os.name 三个系统属性,并提供
+ * Java 8 与 Windows 的可靠判定。
+ * <p>
+ * 架构角色:兼容性基础设施——框架与插件按运行环境选择实现(如 Java 8 与新版
+ * 反射/启动器差异);SairCons.printTiInfos 也依赖本类输出环境信息。
+ * <p>
+ * 线程安全说明:{@link #version}/{@link #javaPath}/{@link #sysName} 为不可变
+ * final 字符串;{@link #flag} 为普通字段的惰性缓存——并发首次调用可能重复计算,
+ * 但结果幂等且 Boolean 引用写入原子,不会出现撕裂状态。
+ * <p>
+ * 二进制兼容约束:三个公开常量与 isJava8()/isWindows() 的签名已被插件引用,不可变更。
+ */
 public class CJDK {
 
+	/**
+	 * Java 版本号(java.version 系统属性,如 "1.8.0_202" 或 "17.0.9")。
+	 */
 	public static final String version = System.getProperty("java.version");
+
+	/**
+	 * Java 安装目录(java.home 系统属性)。
+	 */
 	public static final String javaPath = System.getProperty("java.home");
+
+	/**
+	 * 操作系统名(os.name 系统属性,如 "Windows 11")。
+	 */
 	public static final String sysName = System.getProperty("os.name");
 
+	/**
+	 * isJava8 判定结果的惰性缓存(null 表示未计算)。
+	 */
 	private static Boolean flag = null;
 
+	/**
+	 * 判断当前 JVM 是否为 Java 8:版本号先截去 "_" 后缀(如 1.8.0_202 → 1.8.0),
+	 * 再做 "1.8" 前缀判断——前缀比较不受系统区域设置影响
+	 * (修复 String.format 区域敏感导致的误判问题);结果惰性缓存。
+	 *
+	 * @return true 表示 Java 8
+	 */
 	public final static boolean isJava8() {
 		if (flag != null)
 			return flag;
-		else {
-			String lv = version;
-			flag = false;
-			if (lv == null)
-				return flag;
+		String lv = version;
+		boolean is8 = false;
+		if (lv != null) {
 			if (lv.contains("_"))
 				lv = lv.split("_")[0];
-			if (lv.contains("."))
-				lv = String.format("%.1f", (Double.parseDouble(mod(lv))));
-			if ("1.8".equals(lv))
-				flag = true;
-			else
-				flag = false;
+			// 前缀判断:不受系统区域设置影响(修复String.format区域敏感问题)
+			is8 = lv.startsWith("1.8");
 		}
-		return flag;
+		flag = is8;
+		return is8;
 	}
 
-	private static String mod(String lv) {
-		boolean isFindPoint = false;
-		StringBuilder sb = new StringBuilder();
-		char[] cs = lv.toCharArray();
-		for (char c : cs) {
-			if (!isFindPoint || c != '.')
-				sb.append(c);
-			if (c == '.')
-				isFindPoint = true;
-		}
-		return sb.toString();
-	}
-
-	public static String toCMDreStart(String[] args) {
-		StringBuilder arg = new StringBuilder(makeJavaPath());
-		arg.append("java" + makeExe());
-		arg.append(" -Xbootclasspath/a:");
-		ArrayList<String> bootJars = ToolPack.getAllFilesPath(new File(Pathes.bootDir), true);
-		for (String name : bootJars)
-			if (name.endsWith(".jar")) {
-				arg.append(makeName(false, name)).append(File.pathSeparator);
-			}
-
-		arg.append(". ");
-		arg.append("-jar ");
-		arg.append(myPath());
-		arg.append(" unboot ");
-		if (args != null) {
-			for (String s : args)
-				arg.append(s).append(' ');
-			arg.deleteCharAt(arg.length() - 1);
-		}
-		String oldArgs = arg.toString();
-		return oldArgs;
-	}
-
-	private static String makeExe() {
-		if (isWindows())
-			return "w.exe";
-		else
-			return "";
-	}
-
-	private static String makeJavaPath() {
-		return new StringBuilder(javaPath).append(File.separator).append("bin").append(File.separator).toString();
-	}
-
-	private static String makeName(boolean isSFW, String name) {
-		StringBuilder sb = new StringBuilder();
-		char[] cs = name.toCharArray();
-		for (int i = cs.length - 1; i >= 0; i--) {
-			sb.insert(0, cs[i]);
-			if ('\\' == cs[i] || '/' == cs[i])
-				break;
-		}
-		if (isSFW) {
-			if (sb.length() > 0)
-				sb.deleteCharAt(0);
-			if (sb.length() == 0)
-				sb.append("SFW.jar");
-			return sb.toString();
-		}
-		sb.insert(0, "bootlib");
-		sb.insert(0, File.separatorChar);
-		sb.insert(0, "plugins");
-		sb.insert(0, File.separatorChar);
-		sb.insert(0, '.');
-		return sb.toString();
-	}
-
-	private static String myPath() {
-		return makeName(true, Main.class.getProtectionDomain().getCodeSource().getLocation().getFile());
-	}
-
+	/**
+	 * 判断当前系统是否为 Windows:显式指定 Locale.ROOT 大写比较,
+	 * 土耳其语等区域设置下不再误判(i 的本地化大小写问题)。
+	 *
+	 * @return true 表示 Windows 系列系统
+	 */
 	public static boolean isWindows() {
-		return sysName.toString().toUpperCase().indexOf("WINDOWS") >= 0;
+		// 修复:指定Locale.ROOT,土耳其语等区域设置下不再误判
+		return sysName.toUpperCase(java.util.Locale.ROOT).indexOf("WINDOWS") >= 0;
 	}
 }
