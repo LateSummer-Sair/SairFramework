@@ -495,6 +495,8 @@ public class ConsFrame extends SFrame {
 			} catch (BadLocationException ble) {
 			}
 		}
+		// 光标跟随到文本末尾:与flushPoint(视口强制贴底)双保险,输出后必定定位到最新位置
+		cf.infoPane.setCaretPosition(cf.infoPane.getDocument().getLength());
 
 		// int point = cf.infoPane.getHeight();
 		/* JViewport vp = */
