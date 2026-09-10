@@ -1,7 +1,7 @@
 {
   "_comment": "Harness 确定性约束配置（可选文件，缺失时回退代码内置默认值）。修改后由 ToolDispatcher 热加载（mtime 变化自动重载）。",
   "permissionMatrix": {
-    "sendfile": "MASTER",
+    "sendfile": "AFFECTION:300",
     "block": "MASTER",
     "unblock": "MASTER",
     "delfriend": "MASTER",
@@ -18,10 +18,10 @@
     "setgroupname": "GROUP_MASTER",
     "leavegroup": "GROUP_MASTER",
     "sendimage": "MEDIA",
-    "sendrecord": "MEDIA",
+    "sendrecord": "AFFECTION:300",
     "sendlike": "MEDIA",
     "relay": "MEDIA",
-    "sendfileto": "MEDIA",
+    "sendfileto": "AFFECTION:300",
     "setcard": "AFFECTION:200",
     "approvefriend": "AFFECTION:100",
     "acceptgroupinvite": "AFFECTION:300"
