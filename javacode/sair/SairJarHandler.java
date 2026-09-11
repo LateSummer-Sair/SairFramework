@@ -32,7 +32,8 @@ import java.util.zip.ZipEntry;
  * <ul>
  * <li>URLStreamHandlerFactory 每 JVM 只能设置一次:注册失败时静默降级为
  *     jar: 协议({@link #active()} 返回 false,Main 红字提示),不得改变该回退语义;</li>
- * <li>sairjar: URL 形如 sairjar:file:///...jar!/条目名,条目名百分号编码由
+ * <li>sairjar: URL 形如 sairjar:file:...jar!/条目名(Windows 下即
+ *     sairjar:file:/盘符:/...jar!/条目名),条目名百分号编码由
  *     SairBaseLoader.encodeEntry 生成、本处理器 decodeEntry 对称解码,两边不可单方面修改;</li>
  * <li>{@link #active()} 为公开静态方法,签名不可改。</li>
  * </ul>
@@ -117,6 +118,7 @@ public final class SairJarHandler extends URLStreamHandler {
 		@Override
 		public InputStream getInputStream() throws IOException {
 			String spec = url.getFile();
+			// 以"!/"切分:前半为jar文件路径,后半为条目名
 			int sep = spec.lastIndexOf("!/");
 			if (sep < 0)
 				throw new FileNotFoundException("bad sairjar url: " + spec);
@@ -125,18 +127,21 @@ public final class SairJarHandler extends URLStreamHandler {
 			String entry = decodeEntry(spec.substring(sep + 2));
 			File jarFile;
 			try {
+				// 文件段按URI解析还原(路径中的空格/特殊字符由URI语义处理)
 				jarFile = new File(new URI(filePart));
 			} catch (Exception e) {
 				throw new IOException("bad sairjar file part: " + filePart);
 			}
-			final JarFile jf = new JarFile(jarFile);
+			// 独立打开JarFile(不经过JDK全局JarFileFactory缓存,热卸载后句柄可立即释放;
+			// 统一走openJar,JDK9+支持MR-JAR版本化资源/SPI配置映射)
+			final JarFile jf = SairBaseLoader.openJar(jarFile);
 			try {
 				ZipEntry ze = jf.getEntry(entry);
 				if (ze == null) {
 					throw new FileNotFoundException(entry);
 				}
 				final InputStream raw = jf.getInputStream(ze);
-				// 流关闭即关闭JarFile,无全局缓存,句柄必然释放
+				// 返回包装流:close时先关底层流再关JarFile,无全局缓存,句柄必然释放
 				return new FilterInputStream(raw) {
 					@Override
 					public void close() throws IOException {
@@ -165,9 +170,11 @@ public final class SairJarHandler extends URLStreamHandler {
 		 * @return 解码还原的条目名;解码异常时原样返回输入
 		 */
 		private static String decodeEntry(String s) {
+			// 字节级解码:先按字节累积,最后一次性按UTF-8还原字符串
 			java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream(s.length());
 			for (int i = 0; i < s.length(); i++) {
 				char ch = s.charAt(i);
+				// 合法%XX:还原为单个字节写入并跳过两位
 				if (ch == '%' && i + 2 < s.length()) {
 					int hi = Character.digit(s.charAt(i + 1), 16);
 					int lo = Character.digit(s.charAt(i + 2), 16);
@@ -177,6 +184,7 @@ public final class SairJarHandler extends URLStreamHandler {
 						continue;
 					}
 				}
+				// 普通字符(含非ASCII):按UTF-8编码写入字节;不解码"+"避免与表单编码混淆
 				byte[] bs = String.valueOf(ch).getBytes(java.nio.charset.StandardCharsets.UTF_8);
 				try {
 					bos.write(bs);
@@ -184,6 +192,7 @@ public final class SairJarHandler extends URLStreamHandler {
 				}
 			}
 			try {
+				// UTF-8字节流还原为字符串;还原失败原样返回输入
 				return new String(bos.toByteArray(), java.nio.charset.StandardCharsets.UTF_8);
 			} catch (Exception e) {
 				return s;

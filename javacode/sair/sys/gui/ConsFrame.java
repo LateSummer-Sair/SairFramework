@@ -11,6 +11,7 @@ import java.awt.Graphics2D;
 import java.awt.Image;
 import java.awt.LinearGradientPaint;
 import java.awt.MenuItem;
+import java.awt.Point;
 import java.awt.PopupMenu;
 import java.awt.Rectangle;
 import java.awt.SystemTray;
@@ -29,9 +30,11 @@ import javax.swing.JPopupMenu;
 import javax.swing.JTabbedPane;
 import javax.swing.JTextPane;
 import javax.swing.SwingConstants;
+import javax.swing.plaf.TextUI;
 import javax.swing.text.BadLocationException;
 import javax.swing.text.DefaultCaret;
 import javax.swing.text.Document;
+import javax.swing.text.JTextComponent;
 import javax.swing.text.SimpleAttributeSet;
 import javax.swing.text.StyleConstants;
 
@@ -79,34 +82,34 @@ import javax.swing.JScrollPane;
  * <ul>
  * <li>所有公开静态入口(printo/dePrinto/printComponent/clearComponents/换色/背景/标题/显隐等)
  * 均由<b>调用线程直接执行</b>(恢复旧版方式),不再 invokeLater/EDT Timer 调度;
- * {@link #runOnEDT(Runnable)} 保留仅为二进制兼容,框架内部不再使用,新代码请勿调用。</li>
+ * runOnEDT(Runnable) 已整体注释移除(弃用EDT调度后框架不再提供),新代码请勿调用。</li>
  * <li>文档变更(insertString/remove/setText)统一在 {@link #printLock} 内执行,多线程打印不破坏
  * StyledDocument;段计数 {@code consoleSegments} 同锁保护。</li>
- * <li>滚动经 {@link #flushPoint()} 调用线程直接执行(不再合并/派发)。</li>
+ * <li>滚动:每次输出由 printo0 末尾 setCaretPosition(文档末尾)配合 SairCaret(DefaultCaret子类,ALWAYS_UPDATE策略,见initComp)强制视口贴底——光标闪点(flashpoint)即贴底点,按文本视图布局尺寸(preferredSize)定位末行,由调用线程直接执行(不再合并/派发)。</li>
  * <li>{@link #bgC}/{@link #otC} 为 volatile,任意线程写后立即可见。</li>
  * </ul>
  * <p>
  * <b>二进制兼容约束</b>(旧插件依赖,签名不可改)
  * <ul>
  * <li>公开字段 {@link #cf}、{@link #listModel}、{@link #list} 保持原样;可配置字段
- * {@link #MAX_CONSOLE_TEXT}、{@link #MAX_SINGLE_TEXT}、{@link #MAX_BATCH_PRINTS}、
+ * {@link #MAX_CONSOLE_TEXT}、{@link #MAX_SINGLE_TEXT}、
  * {@link #MAX_CONSOLE_MEMORY} 为 public static,插件可运行时调参。</li>
  * <li>静态方法
  * printo/dePrinto/printComponent/getAllText/getPaneSize/close/setFontColor/
  * setBackgroundColor/setImageBackground/setFrameOpacity/showFrame/hideFrame/setTitleInfo/playScanline/
- * flushPoint/runOnEDT/getTextPane/getFontColor/clearComponents
- * 是插件打印/换肤入口,签名与语义保持稳定。</li>
+ * getTextPane/getFontColor/clearComponents
+ * 是插件打印/换肤入口,签名与语义保持稳定(旧入口 runOnEDT 已随EDT调度弃用整体注释移除)。</li>
  * </ul>
  * <p>
  * <b>资源纪律</b>:背景图按"路径+修改时间+大小"缓存复用;颜色属性缓存 {@link #attrCache} 为256上限LRU; 控制台按
- * {@link #MAX_CONSOLE_MEMORY} 内存预算裁剪最旧一半(防长跑OOM);滚动条UI实例复用
- * ({@link #scrollUIs}:[列表垂直,列表水平,主区垂直,主区水平],换色仅更新配色)。
+ * {@link #MAX_CONSOLE_MEMORY} 内存预算裁剪最旧一半(防长跑OOM);滚动条换色时直接重建
+ * {@link SairScrollBarUI}(原始方式)。
  */
 public class ConsFrame extends SFrame {
 
-	/** 窗口默认标题;setTitleInfo 设置 customTitle 后覆盖显示,flush 不再改回 */
+	/** 窗口默认标题;setTitleInfo 直接 setTitle 覆盖显示(旧 customTitle+flush 机制已移除,不再自动改回) */
 	public static final String title_str = "SairFrameWork";
-	/** 控制台基准字体(13pt);p_f 随窗口尺寸等比缩放 */
+	/** 控制台基准字体(13pt);p_f 由 reinitFont 按 centerScorllPane 实际宽高重算(尺寸事件驱动) */
 	public static final Font font = Fonts.FONTS_TOOLS.getFont(null, null, 13.0f);
 	/** 框架命令分发器(sair.user.Activity):/help、/print、/load 等命令的实现所在 */
 	public static final FrameActivity fa = new FrameActivity();
@@ -119,7 +122,7 @@ public class ConsFrame extends SFrame {
 	 */
 	public static int MAX_CONSOLE_TEXT = 32 * 1024 * 1024;
 	/**
-	 * 单次插入文本长度上限(字符):超过时拒绝插入(可配置,安全加固)
+	 * 单次插入文本长度上限(字符):超过时拒收原文,改插"text is too long"提示(可配置,安全加固)
 	 */
 	public static int MAX_SINGLE_TEXT = 32 * 1024 * 1024;
 	// 修复:颜色属性缓存改LRU(上限256),随机颜色打印不再无界增长
@@ -138,21 +141,16 @@ public class ConsFrame extends SFrame {
 	 * StyledDocument。
 	 */
 	private static final Object printLock = new Object();
-	/** 自定义窗口标题(setTitleInfo设置):非null时框架不再自动恢复默认标题 */
+	/** 历史:自定义窗口标题字段已随旧flush机制移除;setTitleInfo 现在直接 setTitle 覆盖显示 */
 	// private static String customTitle = null;
 	/** 背景图解码缓存:换色/resize时直接复用,不重复解码 */
 	private static Image cachedBgImage;
 	/** 背景图缓存键:路径(或路径|修改时间|大小),用于判定文件是否变化需重新解码 */
 	private static String cachedBgKey;
-	/** 最近一次解码失败的背景图键:同一失败键只提示一次(失败不写负缓存) */
+	/** 最近一次解码失败的背景图键(负缓存防护):同一失败键只提示一次,且失败不写死缓存——文件修复后仍可重试 */
 	private static String lastFailedBgKey;
 	/** 扫光特效一次性开关:整个进程只播放一次彩虹扫光 */
 	private static boolean scanlinePlayed = false;
-	// 滚动条UI复用(微优化):[列表垂直, 列表水平, 主区垂直, 主区水平],换色时仅更新配色
-	/** 四个滚动条的UI实例缓存,换色时仅setColors+重绘(EDT读写) */
-	private final SairScrollBarUI[] scrollUIs = new SairScrollBarUI[4];
-	/** 对应槽位UI是否已创建:首次setUI,之后仅setColors */
-	private final boolean[] scrollUIInited = new boolean[4];
 	/**
 	 * 控制台内存预算(估算字节,可配置):文本按每字符2字节,每段打印另计结构开销。 超预算自动裁剪最旧一半(修复长跑OOM)。
 	 */
@@ -161,13 +159,13 @@ public class ConsFrame extends SFrame {
 	 * 每次insertString在StyledDocument中的固定元素开销估算(字节)
 	 */
 	private static final int PER_SEGMENT_BYTES = 128;
-	/** 段计数(EDT读写):每插入/删除一段同步增减,供内存预算估算使用 */
+	/** 段计数(printLock内读写):每插入/删除一段同步增减,供内存预算估算使用 */
 	private static long consoleSegments = 0;
 	/** 序列化版本UID(历史值保留) */
 	private static final long serialVersionUID = 3271120553991368988L;
 	/** 控制台单例(公开,旧插件直接引用):构造器私有,静态初始化时创建 */
 	public static ConsFrame cf = new ConsFrame();
-	/** 已加载插件名列表模型(EDT读写) */
+	/** 已加载插件名列表模型(SairCons打印代理注册/移除时写入,列表渲染读取) */
 	public DefaultListModel<String> listModel = new DefaultListModel<String>();
 	/** 已加载插件名列表(公开,旧插件可能直接访问) */
 	public JList<String> list = new JList<String>(listModel);
@@ -188,8 +186,9 @@ public class ConsFrame extends SFrame {
 	/** 标题栏右侧按钮:触发/exit退出 */
 	SButton exit = new SButton("Exit");
 	/**
-	 * 画布选项卡隔离区:printComponent 识别到画布(JPanel/Panel/Canvas)时自动新增一个选项卡;
-	 * 与文本流完全隔离,互不影响布局/复制/清屏。 停靠位置:中心面板右侧(EAST,左侧为Sair按钮切换的输出列表),宽度可由用户拖动左侧手柄调整。
+	 * 画布选项卡隔离区:printComponent 识别到画布(JPanel/Panel/Canvas)/内部窗口/顶层窗口内容时自动新增一个选项卡;
+	 * 与文本流完全隔离,互不影响布局/复制/清屏。 停靠位置:中心面板右侧(EAST,左侧为Sair按钮切换的输出列表),
+	 * 宽度可由用户拖动左侧手柄(tabsGrip)调整;右键菜单可"关闭此面板/清除全部"(事件模板类在 ClicksAct)。
 	 */
 	JTabbedPane tabsPane = new JTabbedPane();
 	/**
@@ -215,15 +214,15 @@ public class ConsFrame extends SFrame {
 		}
 	};
 	/** 隔离区当前宽度(用户可拖动调整,跨显隐保持;窗口resize时按70%上限收敛) */
-	private int tabsWidth = 240;
+	int tabsWidth = 240;
 	/** 隔离区最小宽度(px) */
-	private static final int TABS_MIN_W = 120;
-	/** 手柄按下时的屏幕X与宽度快照(拖动增量基准,仅EDT) */
-	private int gripStartX, gripStartW;
-	/** 标签区右键菜单:关闭此面板 / 清除全部(主题联动在reinit_Color) */
-	private JPopupMenu tabPopup;
+	static final int TABS_MIN_W = 120;
+	/** 手柄按下时的屏幕X与宽度快照(拖动增量基准;TabsGripAdapter按下回调写入,TabsGripMotionAdapter拖动回调读取——系统在EDT派发的鼠标事件) */
+	int gripStartX, gripStartW;
+	/** 标签区右键菜单:关闭此面板 / 清除全部(配色经styleTabPopup,reinit_Color换色时联动;事件模板类在ClicksAct) */
+	JPopupMenu tabPopup;
 	/** 右键点击的选项卡索引(弹出菜单前记录;-1=空白处) */
-	private int popupTabIndex = -1;
+	int popupTabIndex = -1;
 	/** 中部容器:文本控制台(中);隔离区已移至centerPanel右侧(eastWrap) */
 	JPanel consoleWrap = new JPanel();
 	/** 文本控制台(JTextPane,不可编辑):所有printo输出与insertComponent子控件的落点 */
@@ -234,15 +233,15 @@ public class ConsFrame extends SFrame {
 	private static int panelSeq = 0;
 	/** 文本控制台滚动容器(字段名保留历史拼写centerScorllPane) */
 	JScrollPane centerScorllPane = new JScrollPane();
-	/** 背景色(volatile:任意线程写、EDT读,保证跨线程可见) */
+	/** 背景色(volatile:调用线程写、绘制流程读,保证跨线程可见) */
 	volatile Color bgC = Color.DARK_GRAY;
-	/** 默认前景/字体颜色(volatile:任意线程写、EDT读,保证跨线程可见) */
+	/** 默认前景/字体颜色(volatile:调用线程写、打印/绘制流程读,保证跨线程可见) */
 	volatile Color otC = Color.GREEN;
 	/** 系统托盘右键菜单(托盘支持时创建) */
 	private PopupMenu popup;
 	/** 托盘菜单项:重置GUI尺寸、退出 */
 	private MenuItem resetSize_popup, close_popup;
-	/** 随窗口尺寸等比缩放的当前字体 */
+	/** 当前字体(初始=font;随centerScorllPane实际宽高由reinitFont重算) */
 	private Font p_f = font;
 	/** 当前背景图路径(null=无背景);resize/setBounds后按此路径重设背景 */
 	private String BGpath;
@@ -315,7 +314,7 @@ public class ConsFrame extends SFrame {
 
 	// /**
 	// * @deprecated 已彻底弃用EDT调度:框架所有打印/配色/显隐/组件操作均改为调用线程直接执行。
-	// * 方法保留仅为二进制兼容,框架内部不再调用,新代码请勿使用。
+	// * 方法已整体注释移除(弃用EDT调度后框架不再提供),新代码请勿使用。
 	// */
 	// @Deprecated
 	// public static final void runOnEDT(Runnable r) {
@@ -382,6 +381,7 @@ public class ConsFrame extends SFrame {
 				// 兜底:沿用旧逻辑
 				Backgrounds.BG_TOOLS.setNewImageToJPanel(path, cf.centerPanel);
 			}
+			// 记录当前背景图路径(后续换色/resize按此路径重设背景)
 			cf.BGpath = path;
 		} else {
 			cachedBgKey = null;
@@ -423,7 +423,7 @@ public class ConsFrame extends SFrame {
 	}
 
 	/**
-	 * 设置自定义窗口标题(直印模式:调用线程直接执行); customTitle非null期间不再自动恢复默认标题title_str。
+	 * 设置自定义窗口标题(直印模式:调用线程直接执行); 直接 setTitle 覆盖显示,不再自动恢复默认标题title_str。
 	 *
 	 * @param title
 	 *            自定义标题
@@ -464,7 +464,7 @@ public class ConsFrame extends SFrame {
 		return s;
 	}
 
-	/** 单段实际插入(printLock内):MAX_CONSOLE_TEXT全清兜底+MAX_SINGLE_TEXT超长拒绝+内存预算裁剪 */
+	/** 单段实际插入(printLock内):MAX_CONSOLE_TEXT全清兜底+MAX_SINGLE_TEXT超长改插提示+内存预算裁剪+末尾setCaretPosition贴底 */
 	private static void printo0(Integer index, Color c, String text) {
 		if (c == null)
 			c = cf.otC;
@@ -472,6 +472,7 @@ public class ConsFrame extends SFrame {
 			text = "null";
 
 		Document docs = cf.infoPane.getDocument();
+		// 位置归一化:index为null时追加到文档末尾
 		if (index == null)
 			index = docs.getLength();
 		// 直印模式:调用线程直接插入;printLock串行化文档变更,多线程打印不破坏StyledDocument
@@ -495,7 +496,9 @@ public class ConsFrame extends SFrame {
 			} catch (BadLocationException ble) {
 			}
 		}
-		// 光标跟随到文本末尾:与flushPoint(视口强制贴底)双保险,输出后必定定位到最新位置
+		// 光标闪点(flashpoint)跟随到文本末尾:caret为SairCaret(DefaultCaret子类,ALWAYS_UPDATE策略,见initComp),
+		// setCaretPosition(文档末尾)令Swing按文本视图布局尺寸(preferredSize)算出底部并强制视口贴底,
+		// 每次输出后必定滚动定位到最新位置
 		cf.infoPane.setCaretPosition(cf.infoPane.getDocument().getLength());
 
 		// int point = cf.infoPane.getHeight();
@@ -510,9 +513,12 @@ public class ConsFrame extends SFrame {
 	 * 内存预算裁剪:估算 = 文本长度*2字节 + 段落数*每段结构开销。 超预算时删除最旧一半文本(段计数按比例下调),控制台保留近期输出。
 	 */
 	private static void trimConsoleIfNeeded(Document docs) {
+		// 第1步:估算当前占用=文本每字符2字节+段落数×每段固定结构开销
 		long estimate = (long) docs.getLength() * 2L + consoleSegments * PER_SEGMENT_BYTES;
+		// 第2步:未超预算直接返回
 		if (estimate <= MAX_CONSOLE_MEMORY)
 			return;
+		// 第3步:超预算删除最旧一半文本,段计数按比例下调(保留近期输出)
 		int trimLen = Math.max(1, docs.getLength() / 2);
 		try {
 			docs.remove(0, trimLen);
@@ -548,7 +554,7 @@ public class ConsFrame extends SFrame {
 		return c instanceof JPanel || c instanceof java.awt.Panel || c instanceof java.awt.Canvas;
 	}
 
-	/** printComponent的EDT实现:类型识别分派(画布/内部窗口/顶层窗口/子控件/null),细节见方法内注释 */
+	/** printComponent的实现:类型识别分派(画布/内部窗口/顶层窗口/子控件/null),细节见方法内注释 */
 	private static void printComponent0(Component component) {
 		if (component == null) {
 			clearComponents();
@@ -708,8 +714,8 @@ public class ConsFrame extends SFrame {
 		updateCompAreaVisible();
 	}
 
-	/** 按选项卡数量同步隔离区(右停靠容器)显隐并重排中心面板(直印模式:调用线程直接执行) */
-	private static void updateCompAreaVisible() {
+	/** 按选项卡数量同步隔离区(右停靠容器)显隐并重排中心面板;包级:供事件模板类(CloseTabAction/ClearTabsAction)与内部调用(直印模式:调用线程直接执行) */
+	static void updateCompAreaVisible() {
 		boolean has = cf.tabsPane.getTabCount() > 0;
 		if (cf.eastWrap.isVisible() != has) {
 			cf.eastWrap.setVisible(has);
@@ -719,9 +725,14 @@ public class ConsFrame extends SFrame {
 			cf.tabsPane.revalidate();
 			cf.tabsPane.repaint();
 			cf.eastWrap.revalidate();
-			cf.centerPanel.revalidate();
-			cf.centerPanel.repaint();
+			relayoutCenter();
 		}
+	}
+
+	/** 重排并重绘中心面板(包级辅助:供 ClicksAct 中的命名事件模板类使用,不直接暴露SFrame的centerPanel) */
+	static void relayoutCenter() {
+		cf.centerPanel.revalidate();
+		cf.centerPanel.repaint();
 	}
 
 	/**
@@ -840,11 +851,10 @@ public class ConsFrame extends SFrame {
 		}
 	}
 
-	/** 按当前尺寸重算比例/字体/配色(resize与setBounds共用) */
+	/** 按当前尺寸重算比例与配色(resize与setBounds共用;字体不再在此重算,改由centerScorllPane尺寸事件驱动) */
 	private void re_init_styles(int w, int h) {
 
 		this.initSize(w, h);
-		this.initFont(w, h);
 		this.reinit_Color();
 
 	}
@@ -859,12 +869,26 @@ public class ConsFrame extends SFrame {
 			setImageBackground(BGpath);
 	}
 
-	/** 按宽高计算等比字号((w+h)*0.01)并刷新p_f */
-	private void initFont(int w, int h) {
-		float wf = w;
-		float hf = h;
-		float result = (wf * 0.01f) + (hf * 0.01f);
-		p_f = Fonts.FONTS_TOOLS.getFont(null, null, result);
+	/**
+	 * 按控制台滚动容器(centerScorllPane,即infoPane的父容器JScrollPane)的实际宽高
+	 * 重算等比字号((w+h)*0.01)并重刷全部组件字体。
+	 * 由 centerScorllPane 的尺寸事件(ClicksAct.ConsoleResizeAdapter)驱动——
+	 * 布局完成后容器尺寸变化即触发,字体始终跟随容器当前宽高;
+	 * 尺寸为0/负(尚未布局)时回退窗体宽高。
+	 */
+	static void reinitFont() {
+		int pw = cf.centerScorllPane.getWidth(), ph = cf.centerScorllPane.getHeight();
+		if (pw <= 0 || ph <= 0) {
+			pw = cf.getWidth();
+			ph = cf.getHeight();
+		}
+		Font f = Fonts.FONTS_TOOLS.getFont(null, null, (pw * 0.01f) + (ph * 0.01f));
+		// 字号未实际变化时跳过重刷(尺寸事件在拖动/缩放过程中高频触发,避免每帧重建组件样式)
+		if (f == null || f.equals(cf.p_f))
+			return;
+		cf.p_f = f;
+		// 字号变化后按新字号重刷全部组件字体
+		cf.reinit_Color();
 	}
 
 	/** 注册交互(构造期调用):Exit/Sair按钮、输入框回车执行与上下键历史、输入框拖动支持 */
@@ -890,6 +914,7 @@ public class ConsFrame extends SFrame {
 		listP_JSP.setPreferredSize(new Dimension((int) (w * 4), h));
 		// 隔离区宽度:用户拖动调整值跨resize保持,窗口变小时按70%上限收敛
 		tabsWidth = Math.max(TABS_MIN_W, Math.min(tabsWidth, (int) (wi * 0.7f)));
+		// eastWrap宽度按tabsWidth(拖动调宽手柄写入的值)
 		eastWrap.setPreferredSize(new Dimension(tabsWidth, 0));
 		exit.setPreferredSize(btd);
 		sair.setPreferredSize(btd);
@@ -898,23 +923,13 @@ public class ConsFrame extends SFrame {
 		sysinfo.setVerticalAlignment(SwingConstants.CENTER);
 	}
 
-	/** 滚动条UI复用:首次创建SairScrollBarUI并setUI,之后仅setColors换色+重绘(仅EDT调用) */
-	private void setScrollBarUI(JScrollBar bar, int pane, boolean vertical) {
-		int idx = pane * 2 + (vertical ? 0 : 1);
-		if (!scrollUIInited[idx]) {
-			scrollUIInited[idx] = true;
-			scrollUIs[idx] = new SairScrollBarUI(otC, otC, otC);
-			bar.setUI(scrollUIs[idx]);
-		} else {
-			scrollUIs[idx].setColors(otC, otC, otC);
-			bar.repaint();
-		}
-	}
-
-	/** 按bgC/otC重刷全部组件配色(EDT调用):含滚动条UI换色、选项卡内桌面区背景同步 */
+	/** 按bgC/otC重刷全部组件配色(直印模式:调用线程直接执行):含滚动条UI重建(原始方式)、选项卡内桌面区背景同步 */
 	private synchronized void reinit_Color() {
+		// 第1步:中心面板底色同步
 		super.centerPanel.setBackground(bgC);
+		// 第2步:关闭高斯模糊开关并清空其背景图(纯色主题;背景图随后由调用方按BGpath重设)
 		setOpenSetting(false);
+		// 第3步:统一重刷全部组件——字体/透明化/前景色,再按控件类型做专属处理
 		JComponent[] cts = new JComponent[] { list, listP_JSP, tabsPane, eastWrap, tabsGrip, consoleWrap, input, title,
 				inputPanel, sysinfo, titlePanel, sair, exit, infoPane, centerScorllPane, };
 		for (JComponent ct : cts) {
@@ -933,16 +948,14 @@ public class ConsFrame extends SFrame {
 				if (ct instanceof JScrollPane) {
 					JScrollPane jsp = (JScrollPane) ct;
 					jsp.getViewport().setOpaque(false);// 透明化
-					int paneIdx = jsp == listP_JSP ? 0 : 1;
 					JScrollBar sbv = jsp.getVerticalScrollBar();
 					if (sbv != null) {
-						// 微优化:UI实例复用,换色时仅更新配色与重绘
-						setScrollBarUI(sbv, paneIdx, true);
+						sbv.setUI(new SairScrollBarUI(otC, otC, otC));
 						sbv.setOpaque(false);// 透明化
 					}
 					JScrollBar sbh = jsp.getHorizontalScrollBar();
 					if (sbh != null) {
-						setScrollBarUI(sbh, paneIdx, false);
+						sbh.setUI(new SairScrollBarUI(otC, otC, otC));
 						sbh.setOpaque(false);// 透明化
 					}
 					jsp.setBorder(new SBorder(otC));
@@ -960,6 +973,7 @@ public class ConsFrame extends SFrame {
 					ct.setBackground(bgC);
 					ct.repaint();
 				}
+				// 边框按钮前景统一换色
 				for (BorderButton border : getBorders())
 					border.setForeground(otC);
 			}
@@ -977,9 +991,10 @@ public class ConsFrame extends SFrame {
 	}
 
 	/**
-	 * 标签区右键菜单配色与主界面统一(背景/前景/字体/边框,仅EDT调用)。 菜单项为框架创建的JMenuItem,直接按主题色套用。
+	 * 标签区右键菜单配色与主界面统一(背景/前景/字体/边框)。 包级:供事件模板类 TabsPopupAdapter(右键弹出前)
+	 * 与 reinit_Color 共用,调用线程直接执行。 菜单项为框架创建的JMenuItem,直接按主题色套用。
 	 */
-	private void styleTabPopup() {
+	void styleTabPopup() {
 		if (tabPopup == null)
 			return;
 		tabPopup.setBackground(bgC);
@@ -1009,7 +1024,8 @@ public class ConsFrame extends SFrame {
 
 		// 画布选项卡隔离区:停靠中心面板右侧(左侧为Sair按钮切换的输出列表),
 		// 初始隐藏,printComponent 识别到画布后自动显示;左侧手柄可拖动调整宽度;
-		// 安装扁平化UI(圆角药丸标签+主题色联动),与SButton/SBorder自绘风格统一
+		// 安装扁平化UI(扁平药丸:选中=主色实心,未选中=主色与背景预混合的不透明色),
+		// 主题色绘制时实时读取联动,与SButton/SBorder自绘风格统一
 		tabsPane.setUI(new SairTabbedPaneUI());
 		tabsPane.setOpaque(false);
 		eastWrap.setLayout(new BorderLayout(0, 0));
@@ -1018,23 +1034,9 @@ public class ConsFrame extends SFrame {
 		tabsGrip.setPreferredSize(new Dimension(6, 0));
 		tabsGrip.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.E_RESIZE_CURSOR));
 		// 手柄拖动调宽:按下快照屏幕X与宽度,拖动按"向左拖动增宽/向右拖动减宽"换算
-		tabsGrip.addMouseListener(new java.awt.event.MouseAdapter() {
-			@Override
-			public void mousePressed(java.awt.event.MouseEvent e) {
-				gripStartX = e.getXOnScreen();
-				gripStartW = tabsWidth;
-			}
-		});
-		tabsGrip.addMouseMotionListener(new java.awt.event.MouseMotionAdapter() {
-			@Override
-			public void mouseDragged(java.awt.event.MouseEvent e) {
-				int delta = gripStartX - e.getXOnScreen();
-				tabsWidth = Math.max(TABS_MIN_W, Math.min((int) (cf.getWidth() * 0.7f), gripStartW + delta));
-				eastWrap.setPreferredSize(new Dimension(tabsWidth, 0));
-				centerPanel.revalidate();
-				centerPanel.repaint();
-			}
-		});
+		// (事件模板类在 ClicksAct 中,延续BorderButton_Click的命名适配器风格,不用匿名内部类)
+		tabsGrip.addMouseListener(new TabsGripAdapter());
+		tabsGrip.addMouseMotionListener(new TabsGripMotionAdapter());
 		eastWrap.add(tabsGrip, BorderLayout.WEST);
 		eastWrap.add(tabsPane, BorderLayout.CENTER);
 		eastWrap.setVisible(false);
@@ -1042,43 +1044,13 @@ public class ConsFrame extends SFrame {
 		// 注意:/clear 只清控制台文本,隔离区由本菜单管理(用户要求)
 		tabPopup = new JPopupMenu();
 		final JMenuItem closeTabItem = new JMenuItem("关闭此面板");
-		closeTabItem.addActionListener(new ActionListener() {
-			public void actionPerformed(ActionEvent e) {
-				if (popupTabIndex >= 0 && popupTabIndex < cf.tabsPane.getTabCount())
-					cf.tabsPane.removeTabAt(popupTabIndex);
-				updateCompAreaVisible();
-			}
-		});
+		closeTabItem.addActionListener(new CloseTabAction());
 		final JMenuItem clearAllItem = new JMenuItem("清除全部");
-		clearAllItem.addActionListener(new ActionListener() {
-			public void actionPerformed(ActionEvent e) {
-				clearComponents();
-			}
-		});
+		clearAllItem.addActionListener(new ClearTabsAction());
 		tabPopup.add(closeTabItem);
 		tabPopup.add(clearAllItem);
 		// 右键弹出(按下/释放双触发兼容各平台);空白处右键"关闭此面板"置灰
-		tabsPane.addMouseListener(new java.awt.event.MouseAdapter() {
-			private void maybeShow(java.awt.event.MouseEvent e) {
-				if (!e.isPopupTrigger())
-					return;
-				int idx = cf.tabsPane.indexAtLocation(e.getX(), e.getY());
-				popupTabIndex = idx;
-				closeTabItem.setEnabled(idx >= 0);
-				styleTabPopup();
-				tabPopup.show(cf.tabsPane, e.getX(), e.getY());
-			}
-
-			@Override
-			public void mousePressed(java.awt.event.MouseEvent e) {
-				maybeShow(e);
-			}
-
-			@Override
-			public void mouseReleased(java.awt.event.MouseEvent e) {
-				maybeShow(e);
-			}
-		});
+		tabsPane.addMouseListener(new TabsPopupAdapter(closeTabItem));
 		consoleWrap.setLayout(new BorderLayout(0, 0));
 		consoleWrap.add(centerScorllPane, BorderLayout.CENTER);
 
@@ -1090,9 +1062,13 @@ public class ConsFrame extends SFrame {
 		titlePanel.add(title, BorderLayout.CENTER);
 
 
-		DefaultCaret dc = (DefaultCaret) infoPane.getCaret();
+		// 换装SairCaret(DefaultCaret子类):贴底策略同ALWAYS_UPDATE,并屏蔽JDK17关窗销毁竞态NPE
+		SairCaret dc = new SairCaret();
 		dc.setUpdatePolicy(DefaultCaret.ALWAYS_UPDATE);
+		infoPane.setCaret(dc);
 		centerScorllPane.setViewportView(infoPane);
+		// 控制台容器尺寸变化→重算字号(命名事件模板类在ClicksAct;字体不再依赖init群里的旧尺寸)
+		centerScorllPane.addComponentListener(new ConsoleResizeAdapter());
 
 		centerPanel.add(inputPanel, BorderLayout.SOUTH);
 		centerPanel.add(titlePanel, BorderLayout.NORTH);
@@ -1131,27 +1107,84 @@ public class ConsFrame extends SFrame {
 		else
 			return bgC;
 	}
+
+	/**
+	 * 控制台输出面板专用光标(DefaultCaret 子类,JDK8/17 双兼容的关窗竞态防护;必须public静态嵌套,
+	 * JDK17的DefaultCaret$1跨包invokevirtual分派时要求本类与本方法均可访问)。
+	 * <p>
+	 * 背景:JDK9+ 起 DefaultCaret.setDot 把光标重绘调度为 EDT 异步任务
+	 * (invokeLater(new DefaultCaret$1) → 其 run() 以 invokevirtual 调用包私有的
+	 * repaintNewCaret());若此刻窗口已被 dispose,延迟重绘经 modelToView →
+	 * RootView.setSize → FlowView.layoutRow 触发 viewBuffer==null 的 NPE
+	 * (JDK17关窗竞态,stderr刷屏但不影响功能)。
+	 * <p>
+	 * 实现:本类声明同名同签名的 public void repaintNewCaret()——JVM 虚分派命中本方法
+	 * (JDK8 上该方法为 protected,是标准合法覆写;JDK17 上为包私有,因本方法 public 跨包仍可访问)。
+	 * 方法内<b>不调用 super</b>(JDK17 上 super 方法是包私有,跨包 invokespecial 会 IllegalAccessError),
+	 * 改为全部使用 protected/public 成员按 JDK 原逻辑重实现,并加两处销毁防护:
+	 * <ul>
+	 * <li>入口:组件已不可显示(窗口 dispose/关闭)→ 直接跳过 modelToView;</li>
+	 * <li>兜底:入口检查后瞬间销毁的残余竞态 → 窄捕获 RuntimeException 静默跳过(该次重绘本就注定失败)。</li>
+	 * </ul>
+	 * 贴底语义与 DefaultCaret.ALWAYS_UPDATE 完全一致(initComp 中 setUpdatePolicy 设置)。
+	 */
+	public static class SairCaret extends DefaultCaret {
+
+		private static final long serialVersionUID = 1L;
+
+		/**
+		 * 重绘新光标位置(JDK17 由 EDT 异步调用,JDK8 由 setDot/moveDot 同步调用,均虚分派到本覆写):
+		 * 与 JDK 原逻辑一致——modelToView 定位 → adjustVisibility 贴底滚动 → magicCaret 记录 → damage 重绘,
+		 * 仅增加销毁防护(入口 isDisplayable 守卫 + 窄异常兜底)。
+		 */
+		public void repaintNewCaret() {
+			// 步骤1:组件空或已不可显示(窗口已关/销毁)→ 跳过,不再触发modelToView(消除关窗竞态NPE)
+			JTextComponent c = getComponent();
+			if (c == null || !c.isDisplayable())
+				return;
+			TextUI mapper = c.getUI();
+			if (mapper == null || c.getDocument() == null)
+				return;
+			try {
+				// 步骤2:定位光标位置(3参重载JDK8/17均存在;BadLocationException=位置越界,按null处理)
+				Rectangle r = mapper.modelToView(c, getDot(), getDotBias());
+				if (r != null) {
+					// 步骤3:ALWAYS_UPDATE贴底滚动(EDT上直接scrollRectToVisible,非EDT走SafeScroller)
+					adjustVisibility(r);
+					// 步骤4:记录magicCaret(上下键导航锚点,与JDK17原逻辑一致)
+					if (getMagicCaretPosition() == null)
+						setMagicCaretPosition(new Point(r.x, r.y));
+				}
+				// 步骤5:重绘光标区域(damage对null安全)
+				damage(r);
+			} catch (BadLocationException e) {
+				// 位置越界:与JDK原逻辑一致,静默跳过本次重绘
+			} catch (RuntimeException e) {
+				// 销毁竞态兜底:视图在步骤1检查后被并发拆除时Swing内部抛NPE等,吞掉即等同跳过本次重绘
+			}
+		}
+	}
 }
 
 /**
- * 扫光特效面板:一条半透明渐变光带扫过窗体,鼠标穿透,只做纯重绘
+ * 扫光特效面板:一条半透明渐变光带扫过窗体,鼠标穿透,只做纯重绘(由playScanline后台线程逐帧repaint驱动)
  */
 class ScanlinePanel extends JPanel {
 	private static final long serialVersionUID = 1L;
-	/** 光带横向位置(0~1.35,超1.35即结束);仅EDT(Timer回调)读写 */
+	/** 光带横向位置(-0.35起步,>1.35即结束);playScanline后台线程写入,绘制时(Swing在EDT派发的渲染回调)读取 */
 	float pos = -0.35f;
 
 	// 彩虹渐变(静态复用,每帧只有位置变化,零重算)
 	private static final float[] RAINBOW_F = { 0f, 0.14f, 0.29f, 0.43f, 0.57f, 0.71f, 0.86f, 1f };
 	private static final Color[] RAINBOW_C = { //
-			new Color(255, 255, 255, 0), // 透明边缘
+			new Color(255, 255, 255, 10), // 边缘(不用alpha=0,避免渲染问题)
 			new Color(255, 60, 60, 110), // 红
 			new Color(255, 180, 40, 110), // 橙
 			new Color(255, 255, 60, 110), // 黄
 			new Color(60, 220, 80, 110), // 绿
 			new Color(40, 160, 255, 110), // 青
 			new Color(160, 80, 255, 110), // 紫
-			new Color(255, 255, 255, 0) // 透明边缘
+			new Color(255, 255, 255, 10) // 边缘(不用alpha=0,避免渲染问题)
 	};
 
 	/** 构造:非透明=false,自身不绘制底色(光带绘制在paintComponent) */
@@ -1164,7 +1197,7 @@ class ScanlinePanel extends JPanel {
 		return false; // 鼠标穿透,不拦截交互
 	}
 
-	/** 绘制:按pos定位的360px宽彩虹渐变光带(LinearGradientPaint静态配色,仅EDT调用) */
+	/** 绘制:按pos定位的360px宽彩虹渐变光带(LinearGradientPaint静态配色;Swing在EDT派发的渲染回调,repaint线程安全) */
 	@Override
 	protected void paintComponent(Graphics g) {
 		super.paintComponent(g);

@@ -19,7 +19,7 @@ public class FileListennerAdapter implements FileListennerRunnable{
 	 */
 	@Override
 	public boolean create_rename(File filePath) {
-		// TODO Auto-generated method stub
+		// 空实现:仅返回true(继续监听),子类覆写以处理创建/重命名事件
 		return true;
 	}
 
@@ -28,7 +28,7 @@ public class FileListennerAdapter implements FileListennerRunnable{
 	 */
 	@Override
 	public boolean modify(File filePath) {
-		// TODO Auto-generated method stub
+		// 空实现:仅返回true(继续监听),子类覆写以处理修改事件
 		return true;
 	}
 
@@ -37,7 +37,7 @@ public class FileListennerAdapter implements FileListennerRunnable{
 	 */
 	@Override
 	public boolean delete(File filePath) {
-		// TODO Auto-generated method stub
+		// 空实现:仅返回true(继续监听),子类覆写以处理删除事件
 		return true;
 	}
 
@@ -46,7 +46,7 @@ public class FileListennerAdapter implements FileListennerRunnable{
 	 */
 	@Override
 	public boolean overflow(File filePath) {
-		// TODO Auto-generated method stub
+		// 空实现:仅返回true(继续监听),子类覆写以处理事件溢出
 		return true;
 	}
 

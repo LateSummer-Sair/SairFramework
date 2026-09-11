@@ -39,8 +39,9 @@ import sair.sys.gui.swing.control.SairScrollBarUI;
  * 不 import 该 JDK 内部类，避免编译期绑定内部 API。
  * </p>
  * <p>
- * <b>线程安全 / EDT 说明：</b>所有公开方法都直接操作 Swing 组件（setOpaque、setBorder、
- * setSize、repaint、setUndecorated、setOpacity 等），<b>必须在事件分发线程（EDT）调用</b>；
+ * <b>线程说明：</b>AWT 事件回调由系统在 EDT 派发，回调内同步直接执行——所有公开方法都在
+ * 回调内同步操作 Swing 组件（setOpaque、setBorder、setSize、repaint、setUndecorated、
+ * setOpacity 等），框架不再自行调度 EDT。
  * 反射 Method 缓存字段（{@code cachedOpacityMethod} 等）无同步修饰，仅是单线程高频调用下的
  * 微优化（淡入动画），并发调用只会造成重复查找，不影响正确性。
  * </p>
@@ -62,7 +63,8 @@ public class Backgrounds {
 	 * 全局唯一生成器单例：透明度/背景透明化操作统一入口。
 	 * </p>
 	 * <p>
-	 * <b>EDT：</b>其方法操作 Swing 组件，须在 EDT 调用；单例本身无公开可变状态
+	 * <b>线程说明：</b>AWT 事件回调由系统在 EDT 派发，回调内同步直接执行；其方法在回调内
+	 * 同步操作 Swing 组件。单例本身无公开可变状态
 	 * （反射缓存字段见类级说明），线程安全。
 	 * </p>
 	 **/
@@ -80,15 +82,18 @@ public class Backgrounds {
 	 * <li>{@code addborder == false}：清空边框（{@code setBorder(null)}）。</li>
 	 * </ul>
 	 * <p>
-	 * 内部细节：先全局设置 {@code UIManager.put("TabbedPane.contentAreaColor", 透明色)}，
-	 * 再交给带 visited 集合的私有重载递归处理：对 {@link JList} 只处理
+	 * 内部细节：<b>不再</b>向 UIManager 写 {@code TabbedPane.contentAreaColor} 透明色
+	 * （全局 UIManager 污染，且全透明色在部分渲染管线产生渲染错误），透明化仅靠
+	 * {@code setOpaque(false)} 递归；递归交给带 visited 集合的私有重载处理：
+	 * 对 {@link JList} 只处理
 	 * {@code instanceof JComponent} 的渲染器（instanceof 防护，避免强转非组件渲染器失败），
 	 * 对 {@link JTree} 仅当用户未自定义渲染器时才替换为透明 {@link DefaultTreeCellRenderer}
 	 * （避免覆盖插件自己的渲染器），对 {@link JScrollPane}/{@link JScrollBar} 统一换装
 	 * {@link SairScrollBarUI}。
 	 * </p>
 	 * <p>
-	 * <b>EDT：</b>必须在 EDT 调用（操作 UIManager 全局状态与 Swing 组件）。
+	 * <b>线程说明：</b>AWT 事件回调由系统在 EDT 派发，回调内同步直接执行
+	 * （方法在回调内同步操作 Swing 组件与 UIManager 渲染状态）。
 	 * </p>
 	 *
 	 * @param component
@@ -97,7 +102,8 @@ public class Backgrounds {
 	 *            是否加边框（null 就是不变动）
 	 **/
 	public final static void setAllOpaque(JComponent component, Boolean addborder) {
-		UIManager.put("TabbedPane.contentAreaColor", new Color(0, 0, 0, 0));
+		// 修复:透明化仅靠 setOpaque(false) 递归,不再向 UIManager 写 TabbedPane.contentAreaColor 透明色
+		// (全局 UIManager 污染,且全透明色在部分渲染管线产生渲染错误)
 		setAllOpaque(component, new HashSet<JComponent>(), addborder);
 	}
 
@@ -108,12 +114,15 @@ public class Backgrounds {
 	 **/
 	@SuppressWarnings("rawtypes")
 	private final static void setAllOpaque(JComponent component, HashSet<JComponent> hash, Boolean addborder) {
+		// 步骤1:null 防护 + visited 集合防护(共享渲染器等场景防循环处理)
 		if (component == null)
 			return;
 		if (hash.contains(component))
 			return;
+		// 步骤2:透明化本体——清空背景色 + setOpaque(false),不再写 UIManager 透明色
 		component.setBackground(null);
 		component.setOpaque(false);
+		// 步骤3:边框处理——addborder==null 不动边框 / ==true 套 SBorder(SButton 除外,避免覆盖按钮自身绘制边框) / ==false 清空
 		if (addborder == null) {
 		} else if (addborder.equals(true) && !(component instanceof SButton))
 			try {
@@ -127,15 +136,18 @@ public class Backgrounds {
 			} catch (IllegalArgumentException e) {
 
 			}
+		// 步骤4:标记已访问,再按子控件类型差异化递归处理
 		hash.add(component);
 		Component[] components = component.getComponents();
 		for (Component c : components) {
 
+			// 步骤5a:JList——只处理 instanceof JComponent 的渲染器(instanceof 防护,避免强转非组件渲染器失败)
 			if (c instanceof JList) {
 				// 修复:渲染器可能不是JComponent,instanceof防护后只处理可处理的
 				Object renderer = ((JList) c).getCellRenderer();
 				if (renderer instanceof JComponent)
 					setAllOpaque((JComponent) renderer, hash, addborder);
+			// 步骤5b:JScrollPane——垂直/水平滚动条统一换装 SairScrollBarUI,再递归 viewport
 			} else if (c instanceof JScrollPane) {
 				JScrollPane jsc = (JScrollPane) c;
 				JScrollBar vbar = jsc.getVerticalScrollBar();
@@ -147,8 +159,10 @@ public class Backgrounds {
 					hbar.setUI(new SairScrollBarUI());
 				}
 				setAllOpaque(jsc.getViewport(), hash, addborder);
+			// 步骤5c:独立 JScrollBar——换装 SairScrollBarUI
 			} else if (c instanceof JScrollBar) {
 				((JScrollBar) c).setUI(new SairScrollBarUI());
+			// 步骤5d:JTabbedPane——递归 rootPane、每个选项卡头组件与选项卡内容组件
 			} else if (c instanceof JTabbedPane) {
 				JTabbedPane jt = ((JTabbedPane) c);
 				setAllOpaque(jt.getRootPane(), hash, addborder);
@@ -160,10 +174,12 @@ public class Backgrounds {
 					setAllOpaque(tabjc, hash, addborder);
 				}
 				// jt.setUI(ui);
+			// 步骤5e:JRadioButton——显式递归
 			} else if (c instanceof JRadioButton) {
 				setAllOpaque((JRadioButton) c, hash, addborder);
+			// 步骤5f:JTree——仅当未自定义渲染器时才替换(避免覆盖插件自己的渲染器)
 			} else if (c instanceof JTree) {
-				// 修复:仅当用户未自定义渲染器时才替换,避免覆盖插件自己的渲染器
+				// 修复:仅当用户未自定义渲染器(getCellRenderer()==null)时才替换,避免覆盖插件自己的渲染器
 				if (((JTree) c).getCellRenderer() == null) {
 					TreeCellRenderer r = new DefaultTreeCellRenderer() {
 					/**
@@ -189,6 +205,7 @@ public class Backgrounds {
 				((JTree) c).setCellRenderer(r);
 				}
 			}
+			// 步骤5g:其余 JComponent 统一递归透明化
 			if (c instanceof JComponent)
 				setAllOpaque((JComponent) c, hash, addborder);
 		}
@@ -199,7 +216,7 @@ public class Backgrounds {
 	 * 暴力将指定窗体（{@link SFrame}）的中心内容区域整体透明化（包括其所有子控件）：
 	 * 委托 {@link #setAllOpaque(JComponent, Boolean)} 处理 {@code frame.getCenter()}。
 	 * </p>
-	 * <p><b>EDT：</b>必须在 EDT 调用。</p>
+	 * <p><b>线程说明：</b>AWT 事件回调由系统在 EDT 派发，回调内同步直接执行。</p>
 	 *
 	 * @param frame
 	 *            任意 SFrame 窗体（null 静默返回）
@@ -284,7 +301,7 @@ public class Backgrounds {
 
 	/**
 	 * 工厂方法：按背景图路径创建 {@link A_JPanel}（背景图由 A_JPanel 内部加载）。
-	 * <p><b>EDT：</b>创建 Swing 组件须在 EDT 调用。</p>
+	 * <p><b>线程说明：</b>AWT 事件回调由系统在 EDT 派发，回调内同步直接执行（组件创建发生在回调内）。</p>
 	 *
 	 * @param pathUrl 背景图路径（文件路径或类路径资源）
 	 * @return 新建的 A_JPanel
@@ -302,7 +319,7 @@ public class Backgrounds {
 	 * 改为 resize + repaint，由 {@code paintComponent} 按组件新尺寸自行绘制。
 	 * 面板不是 {@link A_JPanel} 时静默忽略。
 	 * </p>
-	 * <p><b>EDT：</b>必须（setSize/repaint）。</p>
+	 * <p><b>线程说明：</b>AWT 事件回调由系统在 EDT 派发，回调内同步直接执行（setSize/repaint 在回调内同步完成）。</p>
 	 *
 	 * @param width 目标宽度（像素）
 	 * @param height 目标高度（像素）
@@ -322,7 +339,7 @@ public class Backgrounds {
 	/**
 	 * 运行时更换 {@link A_JPanel} 的背景图并立即重绘；
 	 * 参数非法（null、或面板不是 A_JPanel）时静默返回。
-	 * <p><b>EDT：</b>必须。</p>
+	 * <p><b>线程说明：</b>AWT 事件回调由系统在 EDT 派发，回调内同步直接执行。</p>
 	 *
 	 * @param pathUrl 新背景图路径
 	 * @param jp 目标面板
@@ -355,7 +372,7 @@ public class Backgrounds {
 	 * {@link Window#setOpacity(float)}。</li>
 	 * </ol>
 	 * <p>所有异常静默吞掉，绝不抛出；null 帧跳过。</p>
-	 * <p><b>EDT：</b>必须。</p>
+	 * <p><b>线程说明：</b>AWT 事件回调由系统在 EDT 派发，回调内同步直接执行。</p>
 	 *
 	 * @param f 目标透明度 0.0f~1.0f
 	 * @param jf 变长参数：一个或多个 JFrame（null 元素跳过）
@@ -364,6 +381,7 @@ public class Backgrounds {
 		if (jf == null)
 			return;
 		for (JFrame frame : jf) {
+			// 步骤1:去除系统装饰(失败静默忽略;null 帧跳过)
 			if (frame != null)
 				try {
 					frame.setUndecorated(true);
@@ -371,6 +389,7 @@ public class Backgrounds {
 
 				}
 			boolean done = false;
+			// 步骤2:反射调用 setWindowOpacity(Window,float) 设置透明度
 			Method m = getOpacityMethod();
 			if (m != null) {
 				try {
@@ -380,6 +399,7 @@ public class Backgrounds {
 				} catch (Exception e) {
 				}
 			}
+			// 步骤3:反射不可用(JDK10+ 已删除 AWTUtilities)时回退公开 API Window.setOpacity(f)
 			if (!done && frame != null) {
 				try {
 					frame.setOpacity(f);
@@ -401,7 +421,7 @@ public class Backgrounds {
 	 * {@code setWindowOpaque(Window,boolean)}（见 {@link #getOpaqueMethod()}）；
 	 * 反射失败回退 {@link Window#setOpacity(b ? 1.0f : 0.1f)}；异常静默，null 帧跳过。
 	 * </p>
-	 * <p><b>EDT：</b>必须。</p>
+	 * <p><b>线程说明：</b>AWT 事件回调由系统在 EDT 派发，回调内同步直接执行。</p>
 	 *
 	 * @param b true=不透明；false=半透明（0.1f）
 	 * @param jf 变长参数：一个或多个 JFrame（null 元素跳过）
@@ -410,6 +430,7 @@ public class Backgrounds {
 		if (jf == null)
 			return;
 		for (JFrame frame : jf) {
+			// 步骤1:去除系统装饰(失败静默忽略;null 帧跳过)
 			if (frame != null)
 				try {
 					frame.setUndecorated(true);
@@ -417,6 +438,7 @@ public class Backgrounds {
 
 				}
 			boolean done = false;
+			// 步骤2:反射调用 setWindowOpaque(Window,boolean),参数 b 原样传入
 			Method m = getOpaqueMethod();
 			if (m != null) {
 				try {
@@ -428,6 +450,7 @@ public class Backgrounds {
 				} catch (Exception e) {
 				}
 			}
+			// 步骤3:反射不可用时回退公开 API——b=true→setOpacity(1.0f) 不透明(全实),b=false→0.1f 半透明
 			if (!done && frame != null) {
 				try {
 					// 修复:参数语义b=true→不透明(全实),b=false→半透明;原实现硬编码0.1f导致参数失效

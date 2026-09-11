@@ -42,6 +42,22 @@
         max-width: 90vw;
     }
 
+    .poem-dedication {
+        text-align: center;
+        font-size: clamp(1rem, 1.8vw, 1.5rem);
+        font-weight: normal;
+        letter-spacing: 0.15em;
+        margin-top: 2.5rem;
+        margin-bottom: 1.5rem;
+        line-height: 1.8;
+    }
+
+    .pd {
+        display: inline-block;
+        color: transparent;
+        white-space: pre;
+    }
+
     .poem-title {
         font-size: clamp(1.8rem, 3.5vw, 2.8rem);
         font-weight: normal;
@@ -83,7 +99,7 @@
         position: fixed;
         bottom: 32px;
         left: 50%;
-        transform: translateX(-50%);
+        transform: translateX(calc(-50% - 75px));
         z-index: 2;
         pointer-events: auto;
         color: rgba(255,255,255,0.5);
@@ -103,9 +119,53 @@
         text-shadow: 0 0 20px rgba(255,255,255,0.5);
         box-shadow: 0 0 30px rgba(255,255,255,0.1);
     }
+
+    .music-btn {
+        position: fixed;
+        bottom: 32px;
+        left: 50%;
+        transform: translateX(calc(-50% + 75px));
+        z-index: 2;
+        pointer-events: auto;
+        color: rgba(255,255,255,0.5);
+        text-decoration: none;
+        font-size: 0.9rem;
+        letter-spacing: 0.1em;
+        transition: all 0.4s;
+        padding: 8px 20px;
+        border: 1px solid rgba(255,255,255,0.2);
+        border-radius: 20px;
+        font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+        background: transparent;
+        cursor: pointer;
+    }
+
+    .music-btn:hover {
+        color: rgba(255,255,255,0.9);
+        border-color: rgba(255,255,255,0.6);
+        text-shadow: 0 0 20px rgba(255,255,255,0.5);
+        box-shadow: 0 0 30px rgba(255,255,255,0.1);
+    }
+
+    .music-btn.playing {
+        animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+        0%, 100% { 
+            border-color: rgba(255,255,255,0.2);
+            box-shadow: 0 0 0 rgba(255,255,255,0);
+        }
+        50% { 
+            border-color: rgba(255,255,255,0.5);
+            box-shadow: 0 0 20px rgba(255,255,255,0.15);
+        }
+    }
 </style>
 </head>
 <body>
+
+<audio id="bgMusic" src="../audio/bgm.mp3" autoplay loop></audio>
 
 <canvas id="bgCanvas"></canvas>
 
@@ -113,10 +173,12 @@
     <div class="poem-container" id="poemContainer">
         <h1 class="poem-title">夏末雨停之时</h1>
         <div class="poem-verse" id="poemBody"></div>
+        <div class="poem-dedication" id="poemDedication"></div>
     </div>
 </div>
 
 <a class="back-link" href="../index.html">← 回到文档</a>
+<button class="music-btn" id="musicBtn">🎵 播放音乐</button>
 
 <script>
 (function() {
@@ -168,6 +230,34 @@
     }
     buildCharSpans();
 
+    /* ===== 献词逐字 span 构建 ===== */
+    const DEDICATION_TEXT = `这辈子爱你，我不后悔，\n但愿下辈子，我们能够走到最后。`;
+    let dedicationSpans = [];
+
+    function buildDedicationSpans() {
+        const dedicationEl = document.getElementById('poemDedication');
+        dedicationEl.innerHTML = '';
+        dedicationSpans = [];
+        let frag = document.createDocumentFragment();
+        for (let i = 0; i < DEDICATION_TEXT.length; i++) {
+            let ch = DEDICATION_TEXT[i];
+            if (ch === '\n') {
+                let br = document.createElement('span');
+                br.className = 'pc-br';
+                br.textContent = '\n';
+                frag.appendChild(br);
+            } else {
+                let span = document.createElement('span');
+                span.className = 'pd';
+                span.textContent = ch;
+                frag.appendChild(span);
+                dedicationSpans.push(span);
+            }
+        }
+        dedicationEl.appendChild(frag);
+    }
+    buildDedicationSpans();
+
     /* ===== 全局状态 ===== */
     let W, H, mouseX = -9999, mouseY = -9999;
     let stars = [], raindrops = [], ripples = [];
@@ -180,18 +270,36 @@
     window.addEventListener('resize', resize);
     resize();
 
-    /* ========== 星空 ========== */
-    const STAR_COUNT = 200;
+    /* ========== 星空（呼吸光晕效果） ========== */
+    const STAR_COUNT = 300;
     function initStars() {
         stars = [];
         for (let i = 0; i < STAR_COUNT; i++) {
+            // 30% 概率为暖色星，其余为冷色星
+            let warm = Math.random() < 0.3;
+            let color;
+            if (warm) {
+                color = {
+                    r: 255,
+                    g: 190 + Math.floor(Math.random() * 55),
+                    b: 130 + Math.floor(Math.random() * 90)
+                };
+            } else {
+                color = {
+                    r: 170 + Math.floor(Math.random() * 85),
+                    g: 195 + Math.floor(Math.random() * 60),
+                    b: 220 + Math.floor(Math.random() * 35)
+                };
+            }
             stars.push({
                 x: Math.random() * W,
                 y: Math.random() * H,
-                r: Math.random() * 1.5 + 0.3,
-                twinkle: Math.random() * Math.PI * 2,
-                twinkleSpeed: Math.random() * 0.02 + 0.005,
-                baseAlpha: Math.random() * 0.5 + 0.5
+                r: Math.random() * 1.8 + 0.3,
+                baseAlpha: Math.random() * 0.35 + 0.35,
+                color: color,
+                breathPhase: Math.random() * Math.PI * 2,
+                breathSpeed: Math.random() * 0.012 + 0.004,
+                glowRadius: Math.random() * 7 + 3
             });
         }
     }
@@ -199,12 +307,31 @@
 
     function drawStars() {
         for (let s of stars) {
-            s.twinkle += s.twinkleSpeed;
-            let alpha = s.baseAlpha + Math.sin(s.twinkle) * 0.3;
-            alpha = Math.max(0.2, Math.min(1, alpha));
-            ctx.fillStyle = `rgba(220,230,255,${alpha})`;
+            s.breathPhase += s.breathSpeed;
+            let breath = Math.sin(s.breathPhase);
+            // breath: -1~1, 映射到 0.4~1.0 呼吸因子
+            let breathFactor = 0.7 + breath * 0.3;
+
+            // 外层光晕
+            let glowAlpha = s.baseAlpha * 0.3 * breathFactor;
+            let glowR = s.glowRadius * breathFactor;
+            if (glowR > 0.5 && glowAlpha > 0.01) {
+                let grad = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, glowR);
+                grad.addColorStop(0, `rgba(${s.color.r},${s.color.g},${s.color.b},${glowAlpha})`);
+                grad.addColorStop(0.4, `rgba(${s.color.r},${s.color.g},${s.color.b},${glowAlpha * 0.6})`);
+                grad.addColorStop(1, 'rgba(0,0,0,0)');
+                ctx.fillStyle = grad;
+                ctx.beginPath();
+                ctx.arc(s.x, s.y, glowR, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            // 星核
+            let coreAlpha = Math.min(1, s.baseAlpha * (0.7 + breathFactor * 0.5));
+            let coreR = s.r * (0.75 + breathFactor * 0.5);
+            ctx.fillStyle = `rgba(${s.color.r},${s.color.g},${s.color.b},${coreAlpha})`;
             ctx.beginPath();
-            ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+            ctx.arc(s.x, s.y, coreR, 0, Math.PI * 2);
             ctx.fill();
         }
     }
@@ -349,6 +476,10 @@
                 s.style.color = 'rgba(210,200,190,0.85)';
                 s.style.textShadow = '0 0 8px rgba(255,255,255,0.1)';
             }
+            for (let s of dedicationSpans) {
+                s.style.color = 'transparent';
+                s.style.textShadow = 'none';
+            }
             return;
         }
 
@@ -372,6 +503,29 @@
             } else {
                 s.style.color = 'rgba(210,200,190,0.85)';
                 s.style.textShadow = '0 0 8px rgba(255,255,255,0.1)';
+            }
+        }
+
+        for (let s of dedicationSpans) {
+            let rect = s.getBoundingClientRect();
+            let cx = rect.left + rect.width / 2;
+            let cy = rect.top + rect.height / 2;
+            let dx = cx - mouseX;
+            let dy = cy - mouseY;
+            let dist = Math.sqrt(dx * dx + dy * dy);
+
+            if (dist < RADIUS) {
+                let t = 1 - dist / RADIUS;
+                let r = Math.floor(240 + t * 15);
+                let g = Math.floor(200 + t * 55);
+                let b = Math.floor(180 + t * 75);
+                let alpha = 0.85 + t * 0.15;
+                let glow = t * 18;
+                s.style.color = `rgba(${r},${g},${b},${alpha})`;
+                s.style.textShadow = `0 0 ${glow}px rgba(255,240,200,${t})`;
+            } else {
+                s.style.color = 'transparent';
+                s.style.textShadow = 'none';
             }
         }
     }
@@ -423,6 +577,53 @@
     window.addEventListener('resize', function() {
         clearTimeout(resizeTimer);
         resizeTimer = setTimeout(function() { resize(); initStars(); }, 300);
+    });
+
+    /* ========== 音乐控制 ========== */
+    const bgMusic = document.getElementById('bgMusic');
+    const musicBtn = document.getElementById('musicBtn');
+    let isPlaying = false;
+
+    // 尝试自动播放（若被浏览器阻止，则首次用户交互时自动播放）
+    function startMusic() {
+        bgMusic.play().then(() => {
+            if (!isPlaying) {
+                isPlaying = true;
+                musicBtn.textContent = '🔇 暂停音乐';
+                musicBtn.classList.add('playing');
+            }
+        }).catch(() => {});
+    }
+
+    // 默认显示为播放中状态
+    musicBtn.textContent = '🔇 暂停音乐';
+    musicBtn.classList.add('playing');
+    startMusic();
+
+    // 兜底：首次用户交互时自动播放
+    function autoPlayOnInteract() {
+        startMusic();
+        document.removeEventListener('click', autoPlayOnInteract);
+        document.removeEventListener('touchstart', autoPlayOnInteract);
+        document.removeEventListener('keydown', autoPlayOnInteract);
+    }
+    document.addEventListener('click', autoPlayOnInteract);
+    document.addEventListener('touchstart', autoPlayOnInteract);
+    document.addEventListener('keydown', autoPlayOnInteract);
+
+    // 点击按钮切换播放状态
+    musicBtn.addEventListener('click', function() {
+        if (isPlaying) {
+            bgMusic.pause();
+            musicBtn.textContent = '🎵 播放音乐';
+            musicBtn.classList.remove('playing');
+            isPlaying = false;
+        } else {
+            bgMusic.play();
+            musicBtn.textContent = '🔇 暂停音乐';
+            musicBtn.classList.add('playing');
+            isPlaying = true;
+        }
     });
 })();
 </script>

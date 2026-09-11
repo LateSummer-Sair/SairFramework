@@ -43,16 +43,19 @@ public class CJDK {
 	 * @return true 表示 Java 8
 	 */
 	public final static boolean isJava8() {
+		// 步骤1:缓存命中直接返回
 		if (flag != null)
 			return flag;
 		String lv = version;
 		boolean is8 = false;
 		if (lv != null) {
+			// 步骤2:版本号截去"_"后缀(如1.8.0_202→1.8.0)
 			if (lv.contains("_"))
 				lv = lv.split("_")[0];
-			// 前缀判断:不受系统区域设置影响(修复String.format区域敏感问题)
+			// 步骤3:"1.8"前缀判断——不受系统区域设置影响(修复String.format区域敏感问题)
 			is8 = lv.startsWith("1.8");
 		}
+		// 步骤4:结果惰性缓存后返回
 		flag = is8;
 		return is8;
 	}
@@ -64,7 +67,7 @@ public class CJDK {
 	 * @return true 表示 Windows 系列系统
 	 */
 	public static boolean isWindows() {
-		// 修复:指定Locale.ROOT,土耳其语等区域设置下不再误判
+		// 步骤1:指定Locale.ROOT大写比较,土耳其语等区域设置下不再误判(i的本地化大小写问题)
 		return sysName.toUpperCase(java.util.Locale.ROOT).indexOf("WINDOWS") >= 0;
 	}
 }

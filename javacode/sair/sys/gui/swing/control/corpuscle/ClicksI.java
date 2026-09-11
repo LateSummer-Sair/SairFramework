@@ -10,7 +10,7 @@ import javax.swing.JFrame;
  * (新位置=getXOnScreen()-getOldX());
  * FrameMouseAdapter释放时还经getJFrame做SFrame特殊处理(高斯模糊开关联动)。
  * <p>
- * 线程安全:全部方法仅EDT(鼠标事件线程)调用。
+ * 线程安全:全部方法仅鼠标事件回调调用(系统在EDT派发)。
  * <p>
  * 二进制兼容:接口方法签名(getJFrame/getOldX/setOldX/getOldY/setOldY)不可增删改。
  */

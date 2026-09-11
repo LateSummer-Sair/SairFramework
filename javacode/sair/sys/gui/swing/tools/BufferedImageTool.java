@@ -33,11 +33,12 @@ import sair.user.Activity;
  * Activity 专属加载器）。
  * </p>
  * <p>
- * <b>线程安全 / EDT 说明：</b>缓存 Map 是 {@code synchronizedMap} 包装的 LRU
+ * <b>线程说明：</b>缓存 Map 是 {@code synchronizedMap} 包装的 LRU
  * {@link LinkedHashMap}，{@link #removeAll()} 再用 synchronized 块做整体快照，
  * 任意线程可安全调用；静态 {@code toolkit}（{@link Toolkit#getDefaultToolkit()}）
  * 只读使用，其 {@code createImage(byte[])} 线程安全。但返回的 {@link Image}
- * 解码是异步的，显示/绘制须在 EDT，绘图前可用 {@link java.awt.MediaTracker}
+ * 解码是异步的，显示/绘制发生在 AWT 事件回调内（回调由系统在 EDT 派发，
+ * 同步直接执行）；绘图前可用 {@link java.awt.MediaTracker}
  * 或 {@code ImageIcon} 等待解码完成。
  * </p>
  * <p>
@@ -237,14 +238,17 @@ public class BufferedImageTool {
 	 * @throws IOException 读取 IO 失败
 	 **/
 	public static Image readPackage(String packagePath, Activity activity) throws IOException {
-		// 修复:无前导/的路径不再误删首字符
+		// 修复:类路径资源名只去掉前导 /,无前导 / 的路径不再误删首字符
 		String resPath = packagePath;
 		if (resPath != null && resPath.startsWith("/"))
 			resPath = resPath.substring(1);
+		// ① 系统类路径资源(去前导 / 后的 resPath)
 		InputStream input = LoaderManager.systemLoader.getResourceAsStream(resPath);
 		if (input == null) {
+			// ② 插件资源 getModResStream(原样 packagePath)
 			input = LoaderManager.getModResStream(packagePath);
 			if (input == null && activity != null) {
+				// ③ activity 对应 Exection → SairLoader 专属资源
 				Exection ect = Libraries.exections.get(activity);
 				if (ect != null) {
 					SairLoader loader = LoaderManager.ExecLoaders.get(ect.getURL());
@@ -253,6 +257,7 @@ public class BufferedImageTool {
 				}
 			}
 		}
+		// ④ 命中则一次读入字节并交给 Toolkit 异步解码;全部未命中返回 null
 		if (input != null)
 			return streamRead(input);
 		else
@@ -278,6 +283,7 @@ public class BufferedImageTool {
 	public static Image streamRead(InputStream input) throws IOException {
 		if (input == null)
 			return null;
+		// 步骤1:包 256KB 缓冲流,循环读入全部字节到 ByteArrayOutputStream
 		input = new BufferedInputStream(input, 262144);
 		ByteArrayOutputStream bos = new ByteArrayOutputStream();
 		Image image = null;
@@ -287,12 +293,14 @@ public class BufferedImageTool {
 			int len = -1;
 			while ((len = input.read(buffer)) >= 0)
 				bos.write(buffer, 0, len);
+			// 步骤2:字节数组交给 Toolkit.createImage 异步解码
 			byte[] result = bos.toByteArray();
 			image = toolkit.createImage(result);
 		} catch (IOException e) {
+			// 步骤3:读取失败保存原始 IOException,稍后原样重抛(不被关闭失败掩盖)
 			readError = e;
 		} finally {
-			// 修复:关闭失败不再抛裸IOException掩盖真实读取错误
+			// 步骤4(修复):关闭失败不再抛裸 IOException 掩盖真实读取错误
 			try {
 				bos.close();
 			} catch (Exception e) {

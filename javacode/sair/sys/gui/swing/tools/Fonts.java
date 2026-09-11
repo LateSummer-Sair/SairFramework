@@ -28,10 +28,11 @@ import sair.user.Activity;
  * 支撑 SairFramework 插件化体系下的字体加载与热替换。
  * </p>
  * <p>
- * <b>线程安全 / EDT 说明：</b>{@link #baseFontCache} 的读写全部以 synchronized 块保护，
+ * <b>线程说明：</b>{@link #baseFontCache} 的读写全部以 synchronized 块保护，
  * 任意线程调用安全；返回的 {@link Font} 是不可变对象，可跨线程共享。
- * 但 {@link Font#createFont} 涉及 IO 与解析、耗时较高，禁止在 EDT 上高频重复调用——
- * 命中 base 字体缓存后仅做廉价的 {@code deriveFont}。
+ * 但 {@link Font#createFont} 涉及 IO 与解析、耗时较高，应避免在界面事件回调中高频重复解析
+ * （AWT 事件回调由系统在 EDT 派发，回调内同步直接执行）——命中 base 字体缓存后仅做廉价的
+ * {@code deriveFont}。
  * </p>
  * <p>
  * <b>二进制兼容约束：</b>两个公开 {@code getFont} 重载的签名不可修改；
@@ -48,8 +49,8 @@ public class Fonts {
 	 * 全局唯一生成器单例。
 	 * </p>
 	 * <p>
-	 * <b>EDT：</b>方法本身线程安全（缓存已同步），但把返回的 {@link Font} 应用到
-	 * Swing 组件时须在 EDT 进行。
+	 * <b>线程说明：</b>方法本身线程安全（缓存已同步）；把返回的 {@link Font} 应用到
+	 * Swing 组件发生在 AWT 事件回调内（回调由系统在 EDT 派发，同步直接执行）。
 	 * </p>
 	 **/
 	public final static Fonts FONTS_TOOLS = new Fonts();
@@ -112,7 +113,8 @@ public class Fonts {
 	 * </ol>
 	 * <p>
 	 * <b>线程安全：</b>可在任意线程调用（缓存已同步）；但建议预加载/缓存结果，
-	 * 避免在 EDT 上重复解析字体文件。
+	 * 避免高频重复解析字体文件（每次解析涉及 IO；AWT 事件回调由系统在 EDT 派发，
+	 * 回调内同步直接执行）。
 	 * </p>
 	 *
 	 * @param pathUrl 字体路径（null 取缺省）
@@ -122,6 +124,7 @@ public class Fonts {
 	 * @return Font；失败返回 null（异常被静默吞掉，不抛出）
 	 **/
 	public Font getFont(String pathUrl, Integer fontStyle, Float fontSize, Activity activity) {
+		// 步骤1:参数补缺省——path→Pathes.fontPath、style→Font.PLAIN、size→13.0F
 		if (pathUrl == null)
 			pathUrl = Pathes.fontPath;
 		if (fontStyle == null)
@@ -130,23 +133,27 @@ public class Fonts {
 			fontSize = 13.0F;
 		Font ft = null;
 		InputStream is = null;
-		// 修复:无前导/的路径不再误删首字符
+		// 修复:类路径资源名只去掉前导 /,无前导 / 的路径不再误删首字符
 		String resPath = pathUrl;
 		if (resPath != null && resPath.startsWith("/"))
 			resPath = resPath.substring(1);
 		File file = new File(pathUrl);
 		try {
+			// 步骤2:命中 base 字体缓存则直接派生目标样式/字号返回,不再重新解析字体文件
 			Font base = getBaseFont(pathUrl);
 			if (base != null) {
 				// 命中缓存:直接派生,不再重新解析字体文件
 				ft = base.deriveFont(fontStyle, fontSize);
 				return ft;
 			}
+			// 步骤3:三级查找字体流——① 本地文件存在直接 FileInputStream 读文件
 			if (file.exists())
 				is = new FileInputStream(pathUrl);
 			else {
+				// ② 系统类路径资源(去前导 / 后的 resPath)
 				is = LoaderManager.systemLoader.getResourceAsStream(resPath);
 				if (is == null) {
+					// ③ 插件资源 getModResStream;仍未命中再退到 activity 对应 Exection 的 SairLoader
 					is = LoaderManager.getModResStream(pathUrl);
 					if (is == null && activity != null) {
 						Exection ect = Libraries.exections.get(activity);
@@ -158,6 +165,7 @@ public class Fonts {
 					}
 				}
 			}
+			// 步骤4:createFont(TRUETYPE_FONT) 解析 base 字体(512KB 缓冲流)写入缓存,再派生目标样式/字号
 			if (is != null) {
 				BufferedInputStream bis = new BufferedInputStream(is, 524288);
 				is = bis;
@@ -166,9 +174,10 @@ public class Fonts {
 				ft = b.deriveFont(fontStyle, fontSize);
 			}
 		} catch (Exception e) {
+			// 步骤5:任何解析异常静默置 null(返回 null,不抛出)
 			ft = null;
 		} finally {
-			// 修复:字体流关闭,避免句柄泄漏导致字体文件被锁无法热替换
+			// 步骤6(修复):关闭字体流,避免句柄泄漏导致字体文件被锁无法热替换
 			if (is != null) {
 				try {
 					is.close();

@@ -21,8 +21,8 @@ import sair.sys.gui.swing.control.corpuscle.ClicksI;
  * 上层（如 SFrame 初始化）只面对本类三个公开方法。
  * </p>
  * <p>
- * <b>线程安全 / EDT 说明：</b>所有方法都向 Swing 组件挂监听器，
- * <b>必须在事件分发线程（EDT）调用</b>。
+ * <b>线程说明：</b>AWT 事件回调由系统在 EDT 派发，回调内同步直接执行——所有方法都在
+ * 回调内向 Swing 组件挂监听器，框架不再自行调度 EDT。
  * </p>
  * <p>
  * <b>二进制兼容约束：</b>{@link #CLICKS_TOOLS}、{@link #setClicks(ClicksI)}、
@@ -47,8 +47,9 @@ public class Clicks {
 	/**
 	 * 为 {@link ClicksI} 所描述的窗体安装整窗拖动支持：
 	 * 挂接 {@code MouseCklicksFactory#getFrameMouseAdapter}（按下记组件相对坐标、释放收尾）与
-	 * {@code MouseCklicksFactory#getFrameMouseMotionAdapter}（拖动按原版绝对定位语义移动窗体）。
-	 * <p><b>EDT：</b>必须。</p>
+	 * {@code MouseCklicksFactory#getFrameMouseMotionAdapter}（拖动按原版坐标语义移动窗体：
+	 * 新位置 = 当前屏幕坐标 − 按下时记录的组件相对坐标）。
+	 * <p><b>线程说明：</b>AWT 事件回调由系统在 EDT 派发，回调内同步直接执行。</p>
 	 *
 	 * @param clicks 窗体交互载体（null 静默返回）
 	 **/
@@ -69,7 +70,7 @@ public class Clicks {
 	 * {@link JComponent#registerKeyboardAction(ActionListener, KeyStroke, int)}
 	 * —— 保留兼容，勿改签名/语义。
 	 * </p>
-	 * <p><b>EDT：</b>必须。</p>
+	 * <p><b>线程说明：</b>AWT 事件回调由系统在 EDT 派发，回调内同步直接执行。</p>
 	 *
 	 * @param component 绑定目标组件（null 静默返回）
 	 * @param actionListener 触发动作（null 静默返回）
@@ -84,9 +85,10 @@ public class Clicks {
 	}
 
 	/**
-	 * 为组件安装文件拖放（{@code DragAc#toDrag}：创建/复用 DropTarget，
+	 * 为组件安装文件拖放（{@code DragAc#toDrag}：<b>始终新建</b> DropTarget 并
+	 * {@code setDropTarget} 覆盖——文本组件自带默认 DropTarget，复用会导致文件拖放失效；
 	 * 拖入的文件列表经 {@code DragAcAdapter} 处理）。
-	 * <p><b>EDT：</b>建议在 EDT 安装（DropTarget 注册）。</p>
+	 * <p><b>线程说明：</b>AWT 事件回调由系统在 EDT 派发，回调内同步直接执行。</p>
 	 *
 	 * @param component 接收拖放的目标组件（null 静默返回）
 	 **/

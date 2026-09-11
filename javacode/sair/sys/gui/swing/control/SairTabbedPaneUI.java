@@ -26,11 +26,12 @@ import javax.swing.plaf.basic.BasicTabbedPaneUI;
  * <b>配色约定（主题联动）：</b>所有颜色在<b>绘制时</b>从目标 JTabbedPane 实时读取——
  * 选中标签填充色 = <code>getForeground()</code>（主色 otC），选中文字色 =
  * <code>getBackground()</code>（背景色 bgC，由 ConsFrame 换色流程写入），未选中标签 =
- * 主色 30/255 半透明填充 + 主色文字；顶部另画一条 2px 主色分隔线与主窗体描边呼应。
+ * 主色与背景色按 30/255 <b>预混合的不透明实色</b>填充 + 主色文字（不用半透明 Color，避免部分渲染管线出错）；
+ * 顶部另画一条 2px 主色分隔线与主窗体描边呼应。
  * 因此换色（/setFC /setBC）只需更新属性后 repaint，无需重建 UI。
  * </p>
  * <p>
- * <b>线程安全 / EDT 说明：</b>与所有 Swing UI 一致，仅 EDT 使用；无内部可变状态。
+ * <b>线程安全说明：</b>与所有 Swing UI 一致——绘制方法为 Swing 渲染回调（系统在 EDT 派发）；无内部可变状态。
  * </p>
  * <p>
  * <b>二进制兼容约束：</b>独立新类，无历史符号约束；构造器无参。
@@ -38,7 +39,7 @@ import javax.swing.plaf.basic.BasicTabbedPaneUI;
  */
 public class SairTabbedPaneUI extends BasicTabbedPaneUI {
 
-	/** 未选中标签填充的透明度（0-255，主色叠加） */
+	/** 未选中标签填充的主色混合权重(0-255):与背景色预混合成不透明实色,不再用半透明Color */
 	private static final int UNSELECTED_ALPHA = 30;
 
 	/** 标签区顶部细分隔线高度（像素） */
@@ -90,8 +91,9 @@ public class SairTabbedPaneUI extends BasicTabbedPaneUI {
 	}
 
 	/**
-	 * 标签背景：选中 = 主色实心圆角药丸；未选中 = 主色半透明圆角药丸。
-	 * 颜色绘制时从 tabPane 属性实时读取（主题联动）。
+	 * 标签背景：选中 = 主色实心圆角药丸；未选中 = 主色与背景色<b>预混合的不透明色</b>圆角药丸。
+	 * 不用半透明Color(alpha<255),避免部分渲染管线出现渲染错误;
+	 * 背景取 tabPane.getBackground(),为 null 时按暗灰 64 混合。
 	 */
 	@Override
 	protected void paintTabBackground(Graphics g, int tabPlacement, int tabIndex, int x, int y, int w, int h,
@@ -104,7 +106,17 @@ public class SairTabbedPaneUI extends BasicTabbedPaneUI {
 			if (isSelected) {
 				g2.setColor(base);
 			} else {
-				g2.setColor(new Color(base.getRed(), base.getGreen(), base.getBlue(), UNSELECTED_ALPHA));
+				// 预混合:未选中药丸 = 主色按 UNSELECTED_ALPHA/255 与背景色混合,得到不透明实色
+				Color bg = tabPane.getBackground();
+				int br = 64, bgg = 64, bb = 64;
+				if (bg != null) {
+					br = bg.getRed();
+					bgg = bg.getGreen();
+					bb = bg.getBlue();
+				}
+				int a = UNSELECTED_ALPHA, inv = 255 - a;
+				g2.setColor(new Color((base.getRed() * a + br * inv) / 255, (base.getGreen() * a + bgg * inv) / 255,
+						(base.getBlue() * a + bb * inv) / 255));
 			}
 			g2.fillRoundRect(x, y, w, h, ARC, ARC);
 		} finally {

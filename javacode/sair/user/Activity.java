@@ -51,10 +51,11 @@ public abstract class Activity implements UserRunnable {
     private HashMap<String, String> functionOrderMap = sair.Safe.map();
 
     /**
-     * 判断是否已存在某命令名(包含原始函数名与别名)。
+     * 判断某函数名是否已登记别名(仅别名表;插件原始函数名不在表中,
+     * 原始函数名可被直接调用,无需登记)。
      *
-     * @param name 命令名
-     * @return true 表示已登记
+     * @param name 函数名
+     * @return true 表示该名称已登记为别名
      */
     public final boolean containsOrderName(String name) {
         return functionOrderMap.containsKey(name);
@@ -67,7 +68,9 @@ public abstract class Activity implements UserRunnable {
      * @param funcName 插件原始函数名
      */
     public final void putOrderName(String newName, String funcName) {
+        // 步骤1:写入别名映射(新名→插件原始函数名)
         functionOrderMap.put(newName, funcName);
+        // 步骤2:打印红色登记提示
         SairCons.println(Color.RED, getName() + " funcName : [" + funcName + "] --> [" + newName + "]");
     }
 
@@ -87,29 +90,38 @@ public abstract class Activity implements UserRunnable {
      * @param name 别名
      */
     public final void removeOrderName(String name) {
+        // 步骤1:移除别名并回取原值(原始函数名不在此表,不受影响)
         name = functionOrderMap.remove(name);
+        // 步骤2:移除成功打印提示
         if (null != name)
             SairCons.println(Color.RED, name + " is removed");
     }
 
     /**
-     * 关闭命令输入:置 isOpen=false 后,help/exit/info/ofunc 等内置命令与
-     * 默认函数分发都会拒绝执行(返回 false)。
+     * 关闭命令输入(分三步):①置 isOpen=false;②未命名时落名"SFW";③打印红色关闭提示。
+     * 关闭后 help/info/ofunc 等受门禁的内置命令与默认函数分发都会拒绝执行(返回 false);
+     * exit/close/open/uninstall/oset/orem 不受此门禁。
      */
     public final void close() {
+        // 步骤1:置关闭标志
         isOpen = false;
+        // 步骤2:未命名时落名"SFW"(展示用)
         if (name == null)
             name = "SFW";
+        // 步骤3:打印红色关闭提示
         SairCons.println(Color.RED, name + " is closed input cmd");
     }
 
     /**
-     * 重新开放命令输入。
+     * 重新开放命令输入(分三步):①置 isOpen=true;②未命名时落名"SFW";③打印绿色开放提示。
      */
     public final void open() {
+        // 步骤1:置开放标志
         isOpen = true;
+        // 步骤2:未命名时落名"SFW"(展示用)
         if (name == null)
             name = "SFW";
+        // 步骤3:打印绿色开放提示
         SairCons.println(Color.GREEN, name + " is opened input cmd");
     }
 
@@ -128,15 +140,19 @@ public abstract class Activity implements UserRunnable {
      * @return true=卸载成功;false=该组件没有关联的 Exection(如框架自身组件)或卸载异常
      */
     public final boolean uninstall() {
+        // 步骤1:查本组件关联的Exection
         sair.sys.acticity.Exection exec = Libraries.exections.get(this);
+        // 步骤2:无关联Exection(如框架自身组件)时报错返回false
         if (exec == null) {
             SairCons.println(FCM.Error_Color, "该组件没有关联的Exection,无法卸载");
             return false;
         }
+        // 步骤3:执行Exection.unLoadJar(清注册表→自动调一次exit()+close()→释放类加载器)
         try {
             exec.unLoadJar();
             return true;
         } catch (Exception e) {
+            // 步骤4:卸载异常打印并返回false
             SairCons.println(FCM.Error_Color, "uninstall fail : " + e);
             return false;
         }
@@ -167,10 +183,12 @@ public abstract class Activity implements UserRunnable {
      * @throws Exception 名称已被 Libraries 占用
      */
     public final void setName(String name) throws Exception {
+        // 步骤1:名称已被Libraries占用时抛异常防重名
         boolean isHasName = Libraries.activities.containsKey(name);
         if (isHasName)
             throw new Exception("Early has:" + name + " in Libraries");
         else
+            // 步骤2:写入组件名
             this.name = name;
     }
 
@@ -183,18 +201,22 @@ public abstract class Activity implements UserRunnable {
      */
     public final String getDataDir() {
 
+        // 步骤1:惰性缓存命中直接返回
         if (dataPath != null)
             return dataPath;
 
+        // 步骤2:优先取插件覆写的dataDir()子路径,null时回退类全名
         String path = dataDir();
 
         if (path == null) {
             path = this.getClass().getName();
         }
 
-        // 修复:校验路径仍在data根目录下,防止"../"越界
+        // 步骤3:拼接data根目录(Pathes.dataResDir)与子路径——框架不做规范化校验,
+        // 防"../"越界由插件自行保证(见本方法Javadoc)
         dataPath = Pathes.dataResDir + path + File.separator;
         File file = new File(dataPath);
+        // 步骤4:目录不存在时自动创建,创建失败仅打印提示
         if (!file.exists() && !file.mkdirs()) {
             SairCons.println(FCM.Error_Color, "创建数据目录失败:" + dataPath);
         }

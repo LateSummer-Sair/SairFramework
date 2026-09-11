@@ -74,14 +74,19 @@ class SystemSpliter implements Spliter {
     public SystemSpliter(String cmd) {
         /// /var-add ppid /println-c 255 0 0 'pl/getNowPlayID'
 
+        // 步骤1:"//"开头视为注释行,不解析
         if (cmd.length() >= 2 && cmd.charAt(0) == '/' && cmd.charAt(1) == '/')
             return;
+        // 步骤2:先做单趟%var%展开并解析
         String chked = chk_replace(cmd);
         init(chked);
+        // 步骤3:展开改变了内容且函数为var-add时改用原文重新解析(变量定义命令本身不应再被展开);
+        // 否则reChk迭代展开至稳定
         if (!cmd.equals(chked) && "var-add".equals(getExecFunc()))
             init(cmd);
         else
             init((chked = reChk(chked)));
+        // 步骤4:非var-add时检查'...'内嵌命令:执行并把返回值替换回参数,对象存入o
         if (!"var-add".equals(getExecFunc())) {
             Object[] chkro = chk_R(chked);
             if (chkro != null) {
@@ -110,13 +115,14 @@ class SystemSpliter implements Spliter {
      * @return 数组:{替换后的命令, 内嵌执行结果对象}(无内嵌段时仅含命令一个元素)
      */
     static Object[] chk_R(String cmd) {
-        // 性能优化:无单引号时跳过正则匹配
+        // 步骤1:无单引号时跳过正则匹配,快速返回原文(性能优化)
         if (cmd.indexOf('\'') < 0)
             return new Object[] { cmd };
 
         Pattern p = Pattern.compile(pattern2R);
         Matcher m = p.matcher(cmd);
         String r = cmd;
+        // 步骤2:正则取出首个引号段,匹配异常时按原文返回
         try {
             m.find();
             r = m.group();
@@ -125,6 +131,7 @@ class SystemSpliter implements Spliter {
         }
         Object[] result = new Object[2];
 
+        // 步骤3:执行引号段内容(toRunner),返回值替换回命令;执行结果为null时放弃替换
         if (r != null && !"".equals(r)) {
             result[1] = toRunner(r);
             if (result[1] != null)
@@ -140,11 +147,14 @@ class SystemSpliter implements Spliter {
      * 返回执行结果(命令过短时返回空串)。
      */
     private static Object toRunner(String cmd) {
+        // 步骤1:命令过短(不足一对引号)时返回空串
         if (cmd.length() < 2)
             return "";
         StringBuffer sbf = new StringBuffer(cmd);
+        // 步骤2:去掉首尾单引号
         sbf.deleteCharAt(sbf.length() - 1).deleteCharAt(0);
         cmd = sbf.toString();
+        // 步骤3:作为命令投递SairCons.runner(不记历史),返回执行结果
         Object result = SairCons.runner(false, cmd);
         return result;
     }
@@ -155,7 +165,7 @@ class SystemSpliter implements Spliter {
      * (同名变量只替换一次,避免重复替换歧义;vmap 中不存在的变量保持原样)。
      */
     static String chk_replace(String cmd) {
-        // 性能优化:无%时跳过正则匹配
+        // 步骤1:无%时跳过正则匹配,快速返回(性能优化)
         if (cmd.indexOf('%') < 0)
             return cmd;
         Pattern p = Pattern.compile(patternCmd);
@@ -163,6 +173,8 @@ class SystemSpliter implements Spliter {
 
         HashMap<String, String> localMap = new HashMap<String, String>();
 
+        // 步骤2:收集本命令中出现的全部变量,统一取vmap当前值
+        // (同名变量只替换一次,避免重复替换歧义;vmap中不存在的变量保持原样)
         while (m.find()) {
             String oe = m.group();
             String ne = vmap.get(oe);
@@ -173,6 +185,7 @@ class SystemSpliter implements Spliter {
             }
         }
 
+        // 步骤3:逐个执行替换
         Iterator<String> it = localMap.keySet().iterator();
 
         while (it.hasNext()) {
@@ -196,13 +209,15 @@ class SystemSpliter implements Spliter {
      * 每趟展开后重解析(init)以刷新函数名判断。
      */
     private String reChk(String cmd, int depth) {
-        // 修复:%var%循环映射(A->B,B->A)展开步数上限,防止无限递归
+        // 步骤1:%var%循环映射(A->B,B->A)时展开永不收敛,步数上限64防无限递归(超限告警并按当前结果返回)
         if (depth > 64) {
             SairCons.println(sair.FCM.Error_Color, "疑似存在%var%循环引用,已停止展开");
             return cmd;
         }
+        // 步骤2:仍含%才继续展开
         if (cmd.contains("%")) {
             String chked = chk_replace(cmd);
+            // 步骤3:内容变化则替换、重解析(刷新函数名判断)并进入下一轮
             if ((!cmd.equals(chked))) {
                 cmd = chk_replace(cmd);
                 init(cmd);
@@ -225,6 +240,7 @@ class SystemSpliter implements Spliter {
         char[] cs = cmd.toCharArray();
         boolean hasHead = false, hasFunc = false;
         StringBuffer local = nameBuf;
+        // 步骤1:单趟字符扫描——首个'/'切入函数名段,其后第一个空格切入参数段
         for (int i = 0; i < cs.length; i++) {
             char c = cs[i];
 
@@ -240,6 +256,7 @@ class SystemSpliter implements Spliter {
             local.append(c);
         }
 
+        // 步骤2:三段落定(缺失分隔符的对应段为空串)
         this.args = argsBuf.toString();
         this.name = nameBuf.toString();
         this.func = funcBuf.toString();

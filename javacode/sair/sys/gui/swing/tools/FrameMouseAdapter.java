@@ -17,8 +17,8 @@ import sair.sys.gui.swing.control.corpuscle.ClicksI;
  * {@code FrameMouseMotionAdapter} 成对工作（后者消费 OldX/OldY 计算新位置）。
  * </p>
  * <p>
- * <b>线程安全 / EDT 说明：</b>鼠标事件回调天然在 EDT；{@link #c} 仅在构造后
- * 通过 {@link #setC} 设置一次，之后只读，无需同步。
+ * <b>线程说明：</b>AWT 鼠标事件回调由系统在 EDT 派发，回调内同步直接执行；
+ * {@link #c} 仅在构造后通过 {@link #setC} 设置一次，之后只读，无需同步。
  * </p>
  * <p>
  * <b>二进制兼容约束：</b>类与成员均为包私有，但 {@code MouseCklicksFactory}、
@@ -49,6 +49,7 @@ class FrameMouseAdapter extends MouseAdapter {
 	 **/
 	@Override
 	public void mousePressed(MouseEvent e) {
+		// 按下:记录组件相对坐标(原版语义,供拖动按 当前屏幕坐标-按下时组件相对坐标 定位)
 		c.setOldX(e.getX());
 		c.setOldY(e.getY());
 	}
@@ -60,11 +61,15 @@ class FrameMouseAdapter extends MouseAdapter {
 	 **/
 	@Override
 	public void mouseReleased(MouseEvent evt) {
+		// 释放:仅对处于设置面板展开状态的 SFrame 做收尾
 		if (c.getJFrame() instanceof SFrame) {
 			SFrame sf = (SFrame) (c.getJFrame());
 			if (sf.isOpenSetting()) {
+				// ① 选择背景图
 				sf.selectBgimg();
+				// ② 恢复用户此前浮动透明度
 				sf.setFloat(((SFrame) (c.getJFrame())).getUpFloted());
+				// ③ 复位设置悬浮标记(isSetingFloated=false)
 				sf.setSetingFloated(false);
 			}
 		}

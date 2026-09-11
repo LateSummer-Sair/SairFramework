@@ -45,6 +45,7 @@ public class Mod extends Acti {
      * (所有插件的类可共享其内容)。
      */
     private void loadJar() throws IOException {
+        // 步骤1:jar存在时经LoaderManager挂到全局SairLoader(所有插件的类可共享其内容)
         if (this.exists == true)
             LoaderManager.loadLibJar(this.path);
     }
@@ -53,7 +54,9 @@ public class Mod extends Acti {
      * 登记 Libraries.mods 并输出装载日志。
      */
     private void initMod() {
+        // 步骤1:按jar路径登记mods表
         Libraries.mods.put(this.getPath(), this);
+        // 步骤2:输出装载日志
         SairCons.println(FCM.loadMod_Color, "loaded MODS : " + this.getPath());
     }
 
@@ -64,9 +67,12 @@ public class Mod extends Acti {
      * @throws Exception 资源释放异常
      */
     public void unLoadJar() throws Exception {
+        // 步骤1:摘除mods登记
         Libraries.mods.remove(this.getPath());
+        // 步骤2:输出卸载日志
         SairCons.println(FCM.Error_Color, Pathes.printSplit);
         SairCons.println(FCM.Error_Color, "unload MODS : " + this.getPath());
+        // 步骤3:释放全局加载器中的本jar文件(注意共享loader风险,见类注释)
         this.unLoadJar0();
     }
 
@@ -75,10 +81,13 @@ public class Mod extends Acti {
      * 缓存(释放文件占用,便于后续删除/覆盖)。
      */
     private void unLoadJar0() throws Exception {
+        // 步骤1:从全局LoaderManager.loader移除本jar文件
         File file = new File(path);
         SairLoader l = ((SairLoader) LoaderManager.loader);
 		l .removeJarFiles(file);
-		LoaderManager.libJarPathSet.remove(this.path);
+		// 步骤2:清理libJarPathSet缓存(释放文件占用,便于后续删除/覆盖);
+		// 修复:按规范化路径移除(与loadLibJar的登记键一致,任何路径写法都能清理干净)
+		LoaderManager.libJarPathSet.remove(LoaderManager.canonicalPath(this.path));
     }
 
 }

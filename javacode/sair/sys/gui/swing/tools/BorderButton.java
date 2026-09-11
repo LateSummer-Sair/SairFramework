@@ -23,9 +23,9 @@ import sair.sys.gui.swing.control.SFrame;
  * “四边按钮 + 原内容居中”的 BorderLayout。
  * </p>
  * <p>
- * <b>线程安全 / EDT 说明：</b>所有构造与使用都必须在 EDT（Swing 组件）；
- * 实例字段 fx/fy/nx/ny 由鼠标事件线程（即 EDT）读写，无需额外同步，
- * 但<b>不要跨线程共享同一实例</b>。
+ * <b>线程说明：</b>AWT 事件回调由系统在 EDT 派发，回调内同步直接执行——构造与使用
+ * 均发生在回调内（Swing 组件）；实例字段 fx/fy/nx/ny 由鼠标事件回调同步读写，
+ * 无需额外同步，但<b>不要跨线程共享同一实例</b>。
  * </p>
  * <p>
  * <b>二进制兼容约束：</b>公开成员（{@link #setDefaultBorderButtons(SFrame)}、
@@ -53,7 +53,8 @@ public class BorderButton extends SButton {
      * 外部禁止修改其 width/height（共享状态注意）。
      **/
     private static Dimension Dsize = new Dimension(4, 4);
-    /** 拖拽增量暂存：fx/fy 为按下点屏幕坐标，nx/ny 为本轮拖动增量（仅 EDT 读写）。 */
+    /** 拖拽增量暂存：fx/fy 为按下点屏幕坐标，nx/ny 为本轮拖动增量
+     * （AWT 鼠标事件回调内同步读写，回调由系统在 EDT 派发）。 */
     int fx, fy, nx, ny;
     /** 最小高/宽（拖动下限，构造时取 frame 初始尺寸，可通过 setter 调整）。 */
     private int minHeight, minWidth;
@@ -85,7 +86,7 @@ public class BorderButton extends SButton {
      * NORTH/SOUTH/WEST/EAST 各放一个 BorderButton（默认首选尺寸 4x4），
      * 原内容居中，随后 {@code frame.setContentPane(jp_new)} 整体替换。
      * </p>
-     * <p><b>EDT：</b>必须。</p>
+     * <p><b>线程说明：</b>AWT 事件回调由系统在 EDT 派发，回调内同步直接执行。</p>
      *
      * @param frame 需要支持动态调整大小的窗体（null 返回 null）
      * @return 按 {NORTH, SOUTH, WEST, EAST} 顺序排列的四个按钮；frame 为 null 时返回 null

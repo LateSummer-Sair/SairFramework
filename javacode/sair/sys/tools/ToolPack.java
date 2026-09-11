@@ -14,6 +14,7 @@ import java.util.regex.Pattern;
 
 import sair.FCM;
 import sair.LoaderManager;
+import sair.SairBaseLoader;
 import sair.sys.SairCons;
 import sair.user.Activity;
 import sair.user.SpliterSPI;
@@ -60,31 +61,36 @@ public final class ToolPack {
      * @return 绝对目录路径(以系统分隔符结尾)
      */
     public final static String getPath() {
+        // 步骤1:惰性缓存命中直接返回
         if (localPath != null)
             return localPath;
 
         String filePath = null;
         try {
+            // 步骤2:优先取本类codeSource位置;agent加载等场景为null时回退工作目录
             java.security.CodeSource cs = ToolPack.class.getProtectionDomain().getCodeSource();
             if (cs == null || cs.getLocation() == null) {
-                // 修复:agent加载等场景下codeSource为null,回退到工作目录
                 filePath = System.getProperty("user.dir");
             } else {
-                // 修复:完整URL解码(仅%20会导致中文目录%XX不解码,plugins/data写错位置)
+                // 步骤3:完整URL解码(仅解%20会导致中文目录%XX不解码,plugins/data写错位置)
                 filePath = java.net.URLDecoder.decode(cs.getLocation().getPath(), "UTF-8");
             }
         } catch (Exception e) {
+            // 步骤4:任何异常同样回退工作目录
             filePath = System.getProperty("user.dir");
         }
 
+        // 步骤5:位于jar内时截取到所在目录
         if (filePath.endsWith(".jar"))
             filePath = filePath.substring(0, filePath.lastIndexOf("/") + 1);
 
+        // 步骤6:转绝对路径并写入缓存
         return (localPath = new File(filePath).getAbsolutePath());
     }
 
     /**
-     * 收集指定路径下全部文件路径(含起始路径本身;b=false 时不递归子目录)。
+     * 收集起始路径下全部文件/目录路径(深度优先;起始路径本身不加入结果;
+     * b=false 时只收集起始目录的直接子项、不递归下钻;起始为普通文件时结果为空列表)。
      *
      * @param local 起始文件/目录
      * @param b     是否递归收集子目录
@@ -114,10 +120,13 @@ public final class ToolPack {
      * 目录按 isAll/offset==0 规则继续下钻(listFiles 返回 null 时跳过,如无权限目录)。
      */
     private static final void getAllFilesPath0(ArrayList<String> result, File file, boolean isAll, int offset) {
+        // 步骤1:offset>0时把当前文件/目录路径加入结果(起始层自身不加入)
         if (offset > 0)
             result.add(file.getPath());
+        // 步骤2:目录按"isAll或起始层(offset==0)"规则继续下钻
         if ((file.isDirectory() && isAll) || (file.isDirectory() && offset == 0)) {
             File[] documentArr = file.listFiles();
+            // 步骤3:listFiles返回null(如无权限目录)时跳过
             if (documentArr != null)
                 for (File document : documentArr)
                     getAllFilesPath0(result, document, isAll, offset + 1);
@@ -135,11 +144,14 @@ public final class ToolPack {
         Pattern p = PATH_PATTERN;
         Matcher m = p.matcher(path);
 
+        // 步骤1:提取所有双引号包裹的路径段
         while (m.find()) {
             StringBuffer oe = new StringBuffer(m.group());
             if (oe.length() >= 2) {
+                // 步骤2:剥去首尾双引号
                 oe.deleteCharAt(oe.length() - 1).deleteCharAt(0);
                 if (oe.length() > 0) {
+                    // 步骤3:以'.'开头的相对路径前缀替换为框架根目录(getPath)
                     if ('.' == oe.charAt(0))
                         oe.deleteCharAt(0).insert(0, getPath());
                     result.add(oe.toString());
@@ -148,6 +160,7 @@ public final class ToolPack {
                 continue;
         }
 
+        // 步骤4:未匹配到任何引号段时原样返回整个字符串(单元素数组)
         if (result.size() <= 0)
             return new String[]{path};
 
@@ -186,15 +199,18 @@ public final class ToolPack {
      */
     private static Attributes getAttributes(String path) {
         JarFile jar = null;
+        // 步骤1:打开jar,失败仅打印日志(统一走openJar,JDK9+支持MR-JAR;getManifest仍返回base清单)
         try {
-            jar = new JarFile(path);
+            jar = SairBaseLoader.openJar(new File(path));
         } catch (IOException e) {
             SairCons.println(FCM.Error_Color, e.getMessage());
         }
+        // 步骤2:打开失败直接返回null
         if (jar == null)
             return null;
         //
         Manifest mf = null;
+        // 步骤3:读取MF,任何路径都在finally关闭JarFile释放句柄(Windows下必须关闭,否则jar被占用)
         try {
             mf = jar.getManifest();
         } catch (IOException e) {
@@ -207,6 +223,7 @@ public final class ToolPack {
                     SairCons.println(FCM.Error_Color, e.getMessage());
                 }
         }
+        // 步骤4:MF缺失返回null,否则返回主属性
         if (mf == null)
             return null;
         //
@@ -239,11 +256,13 @@ public final class ToolPack {
     public static boolean setSpliter(String args) throws Exception {
         boolean result = false;
 
+        // 步骤1:用全局LoaderManager.loader加载SPI实现类
         Class<?> clazz = Class.forName(args, false, LoaderManager.loader);
-        // Java17兼容写法:替代已废弃的Class.newInstance()
+        // 步骤2:Java17兼容写法实例化(替代已废弃的Class.newInstance())
         Object o = clazz.getDeclaredConstructor().newInstance();
         SpliterSPI spi = (SpliterSPI) o;
 
+        // 步骤3:安装前置校验(chkToInstall)通过后写入全局管理器(volatile);不通过只是不安装、不抛异常
         if (spi.chkToInstall())
             SairCons.SpliterSpiManager = (SpliterSPI) o;
 
@@ -274,8 +293,12 @@ public final class ToolPack {
      * 二次判空置 null 是防御性写法;SPI 覆写 unInstall 后由本方法兜底摘除。
      */
     public static boolean SpliterChkUninstall(String cmd) {
+        // 步骤1:已安装且命令与SPI声明的卸载命令(getUninstallCMD)完全相等才处理
         if (SairCons.SpliterSpiManager != null && cmd.equals(SairCons.SpliterSpiManager.getUninstallCMD())) {
+            // 步骤2:执行SPI自身卸载逻辑
             SairCons.SpliterSpiManager.unInstall();
+            // 步骤3:防御性摘除——默认unInstall已把SpliterSpiManager置null,这里是二次判空置null;
+            // SPI覆写unInstall后由本方法兜底摘除
             if (SairCons.SpliterSpiManager != null)
                 SairCons.SpliterSpiManager = null;
             return true;
@@ -298,10 +321,12 @@ public final class ToolPack {
      */
     public static String reArg(String[] argSplited, Integer[] its) {
         StringBuffer local = new StringBuffer();
+        // 步骤1:把待剔除下标收进集合
         Set<Integer> itgSet = new HashSet<Integer>();
         for (int i : its)
             itgSet.add(i);
 
+        // 步骤2:按原顺序拼接未剔除段(段间以空格分隔)
         for (int i = 0; i < argSplited.length; i++) {
             if (itgSet.contains(i))
                 continue;

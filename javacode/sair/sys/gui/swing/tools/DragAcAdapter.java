@@ -21,7 +21,8 @@ import javax.swing.text.JTextComponent;
  * 其他拖放类型一律 rejectDrop。
  * </p>
  * <p>
- * <b>线程安全 / EDT 说明：</b>{@link #drop} 由 AWT 的 DnD 事件线程回调（非 EDT）；
+ * <b>线程说明：</b>{@link #drop} 是 AWT 的 DnD 事件回调，由系统在 EDT 派发
+ * （DnD 规范保证回调在 EDT 或与 EDT 同步），回调内同步直接执行；
  * 对 Swing 文本组件的 {@code setText} 直接调用是历史实现约定，改动需评估。
  * 实例只绑定单一组件（{@link #components}），勿跨线程共享。
  * </p>
@@ -48,7 +49,7 @@ class DragAcAdapter extends DropTargetAdapter {
     }
 
     /**
-     * 拖放完成回调（DnD 事件线程）：支持文件列表则 acceptDrop 并处理；
+     * 拖放完成回调（AWT 的 DnD 事件回调，由系统在 EDT 派发）：支持文件列表则 acceptDrop 并处理；
      * 空列表（null 或空）走失败路径 {@code dropComplete(false)}（修复版：
      * 不再抛 IOOBE，且补全拖放手势避免界面卡在拖动状态）；
      * 不支持的类型 rejectDrop；任何异常同样 dropComplete(false) 收尾。
@@ -58,20 +59,24 @@ class DragAcAdapter extends DropTargetAdapter {
     @Override
     public void drop(DropTargetDropEvent dtde) {
         try {
+            // 步骤1:仅支持文件列表 flavor——支持则 acceptDrop 进入数据转移,否则 rejectDrop
             if (dtde.isDataFlavorSupported(DataFlavor.javaFileListFlavor)) {
                 dtde.acceptDrop(DnDConstants.ACTION_COPY_OR_MOVE);
                 @SuppressWarnings("unchecked")
                 List<File> list = (List<File>) (dtde.getTransferable().getTransferData(DataFlavor.javaFileListFlavor));
-                // 修复:空文件列表不再IOOBE,失败路径补dropComplete避免拖放手势卡住
+                // 步骤2(修复):空文件列表不再 IOOBE,失败路径补 dropComplete 避免拖放手势卡住
                 if (list == null || list.isEmpty()) {
                     dtde.dropComplete(false);
                     return;
                 }
+                // 步骤3:把第一个文件绝对路径(带引号)追加到文本组件,成功则 dropComplete(true)
                 dragResponsePlus(list, components);
                 dtde.dropComplete(true);
             } else
+                // 步骤4:不支持的类型一律 rejectDrop
                 dtde.rejectDrop();
         } catch (Exception e) {
+            // 步骤5:任何异常都 dropComplete(false) 收尾,避免拖放手势悬挂
             dtde.dropComplete(false);
         }
     }

@@ -66,8 +66,7 @@
 ├── <span class="typ">run.bat</span>                   <span class="cmt"># Windows 快速启动批处理</span>
 ├── <span class="typ">data/</span>                     <span class="cmt"># 插件数据目录（每个 Activity 自动拥有）</span>
 ├── <span class="typ">plugins/</span>
-│   ├── <span class="typ">bootlib/</span>              <span class="cmt"># 系统级依赖（使用系统 ClassLoader 加载）</span>
-│   ├── <span class="typ">modlib/</span>               <span class="cmt"># 普通依赖库（使用 SairLoader 加载）</span>
+│   ├── <span class="typ">lib/</span>                 <span class="cmt"># 统一依赖库（SairLoader 加载，支持 SPI 与热卸载）</span>
 │   └── <span class="typ">exection/</span>             <span class="cmt"># 插件本体目录（存放开发的插件 JAR）</span>
 ├── <span class="typ">source_code/</span>
 │   ├── <span class="typ">source_code_SFW/</span>      <span class="cmt"># 框架核心源码</span>
@@ -81,12 +80,10 @@
     <div class="card ani-fade-in-up ani-delay-2">
         <div class="card-title"><span class="card-icon">🔄</span> 启动流程</div>
         <ol class="step-list">
-            <li><strong>JVM 检测</strong> — 检测当前 Java 版本。非 Java 8 时会自动重启并使用 <code>-Xbootclasspath/a</code> 加载 bootlib</li>
-            <li><strong>加载 bootlib</strong> — 使用系统 ClassLoader 加载 <code>plugins/bootlib/</code> 中的 JAR</li>
-            <li><strong>加载 modlib</strong> — 使用 <code>SairLoader</code>（自定义 ClassLoader）加载 <code>plugins/modlib/</code> 中的 JAR</li>
+            <li><strong>加载 lib</strong> — 使用 <code>SairLoader</code>（自定义 ClassLoader）加载 <code>plugins/lib/</code> 中的 JAR</li>
             <li><strong>加载 exection</strong> — 扫描 <code>plugins/exection/</code> 中的 JAR，读取 MANIFEST.MF 中的 <code>ACT</code> 属性，实例化 Activity</li>
             <li><strong>启动控制台</strong> — 显示 GUI 控制台窗口，等待用户输入命令</li>
-            <li><strong>自动执行</strong> — 如通过双击 .ir 文件启动，则自动执行脚本内容</li>
+            <li><strong>自动执行</strong> — 先执行 <code>data/framework/autorun.ir</code>；如通过双击 .ir 文件启动，则在其完整结束后再执行该脚本</li>
         </ol>
     </div>
 
@@ -109,16 +106,10 @@
             </thead>
             <tbody>
                 <tr>
-                    <td><code>System ClassLoader</code></td>
-                    <td><span class="badge badge-accent">系统</span></td>
-                    <td><code>plugins/bootlib/</code></td>
-                    <td>JVM 功能修补、SPI、线程上下文操作</td>
-                </tr>
-                <tr>
                     <td><code>SairLoader</code></td>
                     <td><span class="badge badge-accent2">自定义</span></td>
-                    <td><code>plugins/modlib/</code></td>
-                    <td>普通依赖库，支持热卸载</td>
+                    <td><code>plugins/lib/</code></td>
+                    <td>统一依赖库，支持 SPI（ServiceLoader/DriverManager）与热卸载</td>
                 </tr>
                 <tr>
                     <td><code>ExectionLoader</code></td>
@@ -130,6 +121,12 @@
         </table>
     </div>
 
+    <div class="card ani-fade-in-up ani-delay-2">
+        <div class="card-title"><span class="card-icon">🧩</span> SPI 能力（线程上下文类加载器）</div>
+        <p>框架执行插件命令时会自动将当前线程的上下文类加载器设置为该插件的 <code>ExectionLoader</code>（命令执行完毕自动恢复），因此 <code>ServiceLoader</code>、<code>DriverManager</code>（SQL 驱动）、<code>AudioSystem</code>（音频编解码器）等机制可以直接发现 <code>plugins/lib/</code> 中 JAR 的 <code>META-INF/services</code> 实现。</p>
+        <p>插件代码中也可以手动控制：<code>SairLoader.setThreadContextLoader(loader)</code> 安装并返回旧值，<code>SairLoader.runWithThreadContext(loader, task)</code> 在指定上下文中执行任务。</p>
+    </div>
+
     <!-- 兼容性 -->
     <h2 class="ani-fade-in-up ani-delay-1">🖥️ 兼容性</h2>
     <div class="card ani-fade-in-up ani-delay-2">
@@ -138,8 +135,7 @@
             <thead><tr><th>项目</th><th>要求</th></tr></thead>
             <tbody>
                 <tr><td><strong>操作系统</strong></td><td>Windows、Linux 及所有支持 Java 的系统</td></tr>
-                <tr><td><strong>Java 版本</strong></td><td>Java 8 及以上（推荐 JDK 8）</td></tr>
-                <tr><td><strong>特别注意</strong></td><td>Java 8 以上版本使用虚拟机参数加载 bootlib，无法热卸载；Java 8 可以</td></tr>
+                <tr><td><strong>Java 版本</strong></td><td>Java 8 及以上（推荐 JDK 8），无需任何启动参数或重启</td></tr>
             </tbody>
         </table>
     </div>

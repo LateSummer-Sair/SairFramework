@@ -72,29 +72,33 @@ public final class FileListenner implements Runnable {
 	 * </ul>
 	 */
 	private void startListenFile() throws InterruptedException, IOException {
+		// 步骤1:创建WatchService并把监听目录注册为四类事件源(创建/删除/修改/溢出)
 		Path path = Paths.get(dirPath);
 		watcher = FileSystems.getDefault().newWatchService();
 		path.register(watcher, StandardWatchEventKinds.ENTRY_CREATE, StandardWatchEventKinds.ENTRY_DELETE,
 				StandardWatchEventKinds.ENTRY_MODIFY, StandardWatchEventKinds.OVERFLOW);
 		try {
+			// 步骤2:事件消费主循环
 			w: while (isContinue) {
 				WatchKey key;
 				try {
+					// 步骤3:阻塞取事件;stop()关闭watcher唤醒take并抛出ClosedWatchServiceException,视为正常退出路径
 					key = watcher.take();
 				} catch (ClosedWatchServiceException ce) {
-					// stop()关闭watcher唤醒take:正常退出路径
 					break w;
 				}
+				// 步骤4:逐事件翻译为四种回调,回调返回false表示"处理完后停止监听"
 				for (WatchEvent<?> event : key.pollEvents()) {
 					if (!isContinue)
 						break w;
-					// 修复:单次回调异常只记录并继续处理后续事件,不再静默杀死整个监听器
+					// 步骤5:单次回调异常只记录并继续处理后续事件,不再静默杀死整个监听器
 					try {
 						Path fileName = (Path) event.context();
 						Kind<?> c = event.kind();
-						// OVERFLOW事件context为null:退回监听目录本身
+						// 步骤6:OVERFLOW事件context为null,退回监听目录本身构造File
 						File f = fileName == null ? new File(dirPath)
 								: new File(dirPath + File.separator + fileName);
+						// 步骤7:按事件类型分派回调
 						if (c == StandardWatchEventKinds.OVERFLOW) {
 							if (!runnable.overflow(f))
 								break w;
@@ -113,12 +117,13 @@ public final class FileListenner implements Runnable {
 						System.err.println("[FileListenner] callback error: " + e);
 					}
 				}
+				// 步骤8:key.reset()失败(目录被删除)时退出循环
 				if (!key.reset()) {
 					break w;
 				}
 			}
 		} finally {
-			// 修复:任何退出路径都关闭WatchService,释放Linux inotify句柄
+			// 步骤9:任何退出路径都关闭WatchService(释放Linux inotify句柄)并置空引用
 			try {
 				watcher.close();
 			} catch (IOException ce) {
@@ -132,8 +137,9 @@ public final class FileListenner implements Runnable {
 	 * (否则监听线程永不退出);可被任意线程调用,重复调用安全。
 	 */
 	public void stop() {
+		// 步骤1:置停止标志,监听循环尽快退出
 		isContinue = false;
-		// 修复:关闭WatchService唤醒阻塞中的take,否则监听线程永不退出
+		// 步骤2:关闭WatchService唤醒阻塞中的take,否则监听线程永不退出
 		WatchService w = watcher;
 		if (w != null) {
 			try {
@@ -150,9 +156,11 @@ public final class FileListenner implements Runnable {
 	@Override
 	public void run() {
 		try {
+			// 步骤1:参数有效才启动监听主循环(无效时线程静默结束)
 			if (dirPath != null && runnable != null)
 				startListenFile();
 		} catch (InterruptedException | IOException e) {
+			// 步骤2:启动期异常打印堆栈后线程结束
 			e.printStackTrace();
 		}
 	}

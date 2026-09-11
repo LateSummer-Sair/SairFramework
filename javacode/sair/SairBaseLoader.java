@@ -5,6 +5,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.reflect.Constructor;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.security.SecureClassLoader;
@@ -46,8 +47,8 @@ import java.util.zip.ZipEntry;
  *     直接访问(LoaderManager.getModResStream 直接 synchronized(loader.jars)),字段名不可改;</li>
  * <li>{@link #MAX_CLASS_BYTES}(public static long,默认 64MB)可配置,字段名/类型不可改;</li>
  * <li>findClass/findResource/findResources 为 JDK ClassLoader 约定签名,不可改;</li>
- * <li>资源 URL 形如 sairjar:/jar:file:...!/条目名,条目名经百分号编码,
- *     与 SairJarHandler 的解码对称,两边格式不可单方面修改。</li>
+ * <li>资源 URL 形如 sairjar:file:...!/条目名(协议不可用时为 jar:file:...!/条目名),
+ *     条目名经百分号编码,与 SairJarHandler 的解码对称,两边格式不可单方面修改。</li>
  * </ul>
  */
 public class SairBaseLoader extends SecureClassLoader {
@@ -55,6 +56,65 @@ public class SairBaseLoader extends SecureClassLoader {
 	// 修复:注册并行能力,共享lib加载器被多线程loadClass时不再全部串行排队
 	static {
 		ClassLoader.registerAsParallelCapable();
+	}
+
+	/**
+	 * 多版本JAR(MR-JAR)支持开关(公开可配置,默认开;二进制兼容:可改值不可改字段名/类型):
+	 * 关闭后所有JVM(含JDK9+)都只读取base条目,恢复旧版行为;JDK8上本开关无效果
+	 * (JDK8没有多版本概念,永远读base条目,与旧版一致)。
+	 */
+	public static boolean ENABLE_MULTIRELEASE = true;
+
+	/**
+	 * JDK9+ 的 JarFile(File, boolean, int, Runtime.Version) 多版本构造器(反射缓存;
+	 * JDK8上Runtime$Version类不存在,此值为null)。
+	 * <p>源码不能出现任何JDK9+类型(本工程以JDK8 javac编译),故用Class.forName全反射取得,
+	 * 在JDK9+上以Runtime.version()(当前运行时版本)打开多版本jar,getEntry自动映射
+	 * META-INF/versions/N/ 下的类与资源(含META-INF/services的SPI配置)。
+	 */
+	private static final Constructor<JarFile> MR_CTOR;
+
+	/**
+	 * JDK9+ 的 Runtime.version() 返回值(静态块内反射调用一次并缓存;JDK8上为null)。
+	 */
+	private static final Object MR_VERSION;
+
+	static {
+		Constructor<JarFile> c = null;
+		Object v = null;
+		try {
+			// 全反射:JDK8上Class.forName抛ClassNotFoundException→两值都为null→自动降级普通打开
+			Class<?> vc = Class.forName("java.lang.Runtime$Version");
+			c = JarFile.class.getConstructor(File.class, boolean.class, int.class, vc);
+			v = Runtime.class.getMethod("version").invoke(null);
+		} catch (Throwable t) {
+			// 反射不可用(JDK8或特殊JRE):保持null,openJar自动降级普通打开(与旧版行为一致)
+			c = null;
+			v = null;
+		}
+		MR_CTOR = c;
+		MR_VERSION = v;
+	}
+
+	/**
+	 * 统一开jar入口(框架全部 new JarFile 的唯一出口,公开静态):
+	 * JDK9+且开关打开时以多版本模式打开(版本化类与资源自动映射);
+	 * JDK8/反射失败/开关关闭一律降级普通打开(与旧版行为完全一致)。
+	 *
+	 * @param file 目标jar文件
+	 * @return 打开完成的JarFile
+	 * @throws IOException jar无法打开
+	 */
+	public static JarFile openJar(File file) throws IOException {
+		if (ENABLE_MULTIRELEASE && MR_CTOR != null) {
+			try {
+				// mode=1即ZipFile.OPEN_READ(public static final int,硬编码避免源码引用JDK9+符号)
+				return MR_CTOR.newInstance(file, Boolean.TRUE, Integer.valueOf(1), MR_VERSION);
+			} catch (Throwable t) {
+				// 反射调用失败:降级普通打开(行为与旧版一致)
+			}
+		}
+		return new JarFile(file);
 	}
 
 	/**
@@ -92,14 +152,24 @@ public class SairBaseLoader extends SecureClassLoader {
 	 * 并登记进 jars 映射。
 	 *
 	 * @param file 目标 jar 文件;为 null 时静默忽略
-	 * @throws IOException 文件存在但不是 .jar 文件
+	 * @throws IOException 文件不存在或不是 .jar 文件
 	 */
 	protected void addJarFile(File file) throws IOException {
 		if (file != null) {
 			// 修复:大小写不敏感匹配(Locale.ROOT),Linux上.JAR插件不再被忽略
 			if (file.exists() && file.getAbsolutePath().toLowerCase(java.util.Locale.ROOT).endsWith(".jar")) {
+				// 锁外打开(磁盘I/O不占映射锁)
+				JarFile jf = openJar(file);
 				synchronized (jars) {
-					jars.put(file, new JarFile(file));
+					// 修复:重复挂载时旧JarFile必须关闭,否则Windows句柄泄漏(文件锁死)
+					JarFile old = jars.put(file, jf);
+					if (old != null) {
+						try {
+							old.close();
+						} catch (IOException e) {
+							System.err.println("[SairBaseLoader] close replaced jar failed: " + file + " -> " + e);
+						}
+					}
 				}
 			} else
 				throw new IOException("is not JAR File!!!");
@@ -120,7 +190,11 @@ public class SairBaseLoader extends SecureClassLoader {
 				jar = jars.remove(file);
 			}
 			if (jar != null)
-				jar.close();
+				// 修复:关闭在jar自身监视器上执行——与findClass/findResource/getModResStream的
+				// 整段"取条目+读流"互斥:进行中的读取完整结束后才关闭,消除读流中途句柄被关的竞态
+				synchronized (jar) {
+					jar.close();
+				}
 			return jar;
 		} catch (Exception e) {
 			// 修复:关闭失败不再静默(Windows下意味着文件仍被锁定)
@@ -153,28 +227,39 @@ public class SairBaseLoader extends SecureClassLoader {
 	 * @throws ClassNotFoundException 已卸载、条目不存在或读取失败(读取失败携带 cause)
 	 */
 	protected Class<?> findClass(String name) throws ClassNotFoundException {
+		// 已卸载:直接给出"插件已卸载"错误(替代难以定位的ClassNotFoundException)
 		if (dead)
 			throw new ClassNotFoundException(name + " (插件已卸载)");
+		// 类全限定名换算为.class条目路径(二进制名→路径)
 		String classPath = name.replace(".", "/").concat(".class");
+		// 按挂载顺序在全部jar中查找(遍历快照,不持有映射锁)
 		for (File file : snapshotJarFiles()) {
 			JarFile jf;
+			// 锁jars映射取JarFile(与removeJarURL互斥)
 			synchronized (jars) {
 				jf = jars.get(file);
 			}
 			if (jf == null)
 				continue;
 			ZipEntry ze;
-			synchronized (jf) {
-				ze = jf.getEntry(classPath);
-			}
-			if (ze == null)
-				continue;
 			byte[] b;
-			try {
-				b = readEntry(jf, ze);
-			} catch (IOException e) {
-				throw new ClassNotFoundException("URL read fail !!! [" + name + "]", e);
+			// 锁单个JarFile完成"取条目+读字节"整段:与removeJarURL的关闭互斥,
+			// 读流期间句柄不会被并发关闭(消除读到一半抛IllegalStateException的竞态)
+			synchronized (jf) {
+				try {
+					ze = jf.getEntry(classPath);
+					if (ze == null)
+						continue;
+					// 按MAX_CLASS_BYTES上限读取类字节
+					b = readEntry(jf, ze);
+				} catch (IllegalStateException ise) {
+					// 兜底:jar刚被并发卸载关闭(关闭先于本线程进锁),视同该jar未命中,继续查下一个
+					continue;
+				} catch (IOException e) {
+					throw new ClassNotFoundException("URL read fail !!! [" + name + "]", e);
+				}
 			}
+			// 补定义Package后defineClass
 			return defineClass0(name, b);
 		}
 		throw new ClassNotFoundException(name);
@@ -214,7 +299,8 @@ public class SairBaseLoader extends SecureClassLoader {
 
 	/**
 	 * 按 ZipEntry 已知大小一次性读取(避免 ByteArrayOutputStream 反复扩容):
-	 * 声明大小已知时按精确长度读入;未知大小(-1)时走流式缓冲并逐段校验上限。
+	 * 声明大小已知(>0 且可装入数组)时按精确长度读入,读不满按实际长度截断;
+	 * 大小未知(-1)或为 0 时走流式缓冲并逐段校验上限。
 	 *
 	 * @param jf 已打开的 JarFile
 	 * @param ze 目标条目
@@ -223,10 +309,12 @@ public class SairBaseLoader extends SecureClassLoader {
 	 */
 	private static byte[] readEntry(JarFile jf, ZipEntry ze) throws IOException {
 		long size = ze.getSize();
+		// 声明大小直接超限:立即拒绝,不分配内存
 		if (size > MAX_CLASS_BYTES)
 			throw new IOException("entry too large (" + size + " bytes): " + ze.getName());
 		InputStream fis = new BufferedInputStream(jf.getInputStream(ze), 81920);
 		try {
+			// 大小已知:按精确长度一次性读入,读不满按实际长度截断
 			if (size > 0 && size <= Integer.MAX_VALUE - 8) {
 				byte[] b = new byte[(int) size];
 				int off = 0;
@@ -240,6 +328,7 @@ public class SairBaseLoader extends SecureClassLoader {
 					return b;
 				return Arrays.copyOf(b, off);
 			}
+			// 大小未知/为0:流式缓冲读取,每段写入前校验上限
 			ByteArrayOutputStream bos = new ByteArrayOutputStream(81920);
 			byte[] cb = new byte[81920];
 			int code;
@@ -267,7 +356,9 @@ public class SairBaseLoader extends SecureClassLoader {
 	 */
 	@Override
 	protected URL findResource(String name) {
+		// 归一化资源名(去开头"/")
 		String entryName = normEntry(name);
+		// 按挂载顺序在全部jar中查找首个命中条目
 		for (File file : snapshotJarFiles()) {
 			JarFile jf;
 			synchronized (jars) {
@@ -277,11 +368,17 @@ public class SairBaseLoader extends SecureClassLoader {
 				continue;
 			ZipEntry ze;
 			synchronized (jf) {
-				ze = jf.getEntry(entryName);
+				try {
+					ze = jf.getEntry(entryName);
+				} catch (IllegalStateException ise) {
+					// jar刚被并发卸载关闭:视同未命中,继续查下一个jar
+					continue;
+				}
 			}
 			if (ze == null)
 				continue;
 			try {
+				// 生成sairjar:/jar:资源URL(条目名已百分号编码,连接侧对称解码)
 				return jarEntryURL(file, entryName);
 			} catch (MalformedURLException e) {
 				return null;
@@ -302,6 +399,7 @@ public class SairBaseLoader extends SecureClassLoader {
 	protected Enumeration<URL> findResources(String name) throws IOException {
 		String entryName = normEntry(name);
 		Vector<URL> urls = new Vector<URL>();
+		// 收集所有jar中的同名条目(ServiceLoader聚合多jar服务配置依赖此行为)
 		for (File file : snapshotJarFiles()) {
 			JarFile jf;
 			synchronized (jars) {
@@ -311,13 +409,19 @@ public class SairBaseLoader extends SecureClassLoader {
 				continue;
 			ZipEntry ze;
 			synchronized (jf) {
-				ze = jf.getEntry(entryName);
+				try {
+					ze = jf.getEntry(entryName);
+				} catch (IllegalStateException ise) {
+					// jar刚被并发卸载关闭:视同未命中,继续查下一个jar
+					continue;
+				}
 			}
 			if (ze == null)
 				continue;
 			try {
 				urls.add(jarEntryURL(file, entryName));
 			} catch (MalformedURLException e) {
+				// URL构造失败:跳过该命中,继续收集其余jar
 			}
 		}
 		return urls.elements();
@@ -354,8 +458,9 @@ public class SairBaseLoader extends SecureClassLoader {
 	}
 
 	/**
-	 * 条目名百分号编码(仅空格/#/?/% 四个特殊字符;非 ASCII 按 UTF-8 原样传递,
-	 * 由 SairJarHandler 连接侧 decodeEntry 解码还原)。
+	 * 条目名百分号编码(仅空格/#/?/% 四个特殊字符,编码为 %XX 大写十六进制;
+	 * 其余字符含非 ASCII 原样透传,由 SairJarHandler.SairJarConnection.decodeEntry
+	 * 按 UTF-8 字节解码还原,两侧对称)。
 	 *
 	 * @param name 原始条目名
 	 * @return 编码后的条目名
@@ -364,6 +469,7 @@ public class SairBaseLoader extends SecureClassLoader {
 		StringBuilder sb = new StringBuilder(name.length() + 8);
 		for (int i = 0; i < name.length(); i++) {
 			char ch = name.charAt(i);
+			// 仅编码四个URL特殊字符(%XX大写十六进制),其余字符(含非ASCII)原样透传
 			if (ch == ' ' || ch == '#' || ch == '?' || ch == '%') {
 				sb.append('%');
 				String hx = Integer.toHexString(ch).toUpperCase(java.util.Locale.ROOT);

@@ -39,13 +39,13 @@ import sair.user.Activity;
  * 架构角色:package-private 助手类,仅由 FrameActivity 持有单实例;命令实现直接操作 ConsFrame/SairCons/
  * Libraries/LoaderManager 等框架单例,自身不持有窗体状态。
  * <p>
- * 线程安全:命令可能由解释器线程/EDT/worker线程调用——GUI操作(ConsFrame.xxx)内部已派发EDT;
- * 集合(Libraries.activities/mods、IRRunnable.irpool、变量池)访问均加锁;/newthread 用 AtomicInteger
+ * 线程安全:命令可能由解释器线程/worker线程/AWT事件回调调用——GUI操作(ConsFrame.xxx)由调用线程直接执行(直印模式,不再派发EDT);
+ * 集合遍历(showList对Libraries.activities/mods、ir对IRRunnable.irpool、listVar对变量池)加锁防并发修改;/newthread 用 AtomicInteger
  * 限制并发({@link #MAX_NEWTHREADS} 可配置)。无共享可变字段(irContinue 仅脚本线程使用)。
  * <p>
  * 关键约定:/load 支持本地路径、file:/ URL 与 http(s) URL(下载到execDir,文件名经 sanitizeUrlName 消毒);
  * ir脚本读取 readIrFile 优先UTF-8、编码非法回退GB18030;getColor 解析RGB并clamp到0-255;
- * print -c 只拆前3个颜色字段、其余文本用原始子串保留连续空格;download 带连接/读超时。
+ * print -c 只拆前3个颜色字段、其余文本用原始子串保留连续空格;download 带连接/读超时(连接10s/读60s)。
  */
 class FrameActivity_Actions {
 	// 修复:.JPGE拼写错误导致.jpeg被拒绝
@@ -184,9 +184,11 @@ class FrameActivity_Actions {
 	 */
 	private static String sanitizeUrlName(String raw, String fallback) {
 		String name = raw;
+		// 第1步:截断查询串,只保留URL路径最后一段文件名
 		int q = name.indexOf('?');
 		if (q >= 0)
 			name = name.substring(0, q);
+		// 第2步:白名单逐字符过滤(字母/数字/._-/非ASCII),剔除".."、路径分隔符等危险字符
 		StringBuilder sb = new StringBuilder(name.length());
 		for (int i = 0; i < name.length(); i++) {
 			char ch = name.charAt(i);
@@ -196,6 +198,7 @@ class FrameActivity_Actions {
 				sb.append(ch);
 		}
 		name = sb.toString();
+		// 第3步:过滤后为空或纯点号(含".."前缀)时回退到fallback名
 		if (name.isEmpty() || ".".equals(name) || "..".equals(name) || name.startsWith(".."))
 			name = fallback;
 		return name;
@@ -211,6 +214,7 @@ class FrameActivity_Actions {
 		try {
 			File jar;
 			if (isHttpUrl(target)) {
+				// 来源1:http(s) URL——先下载到execDir,文件名经sanitizeUrlName消毒(截查询串+白名单,防路径穿越)
 				File dir = new File(Pathes.execDir);
 				if (!dir.exists())
 					dir.mkdirs();
@@ -218,14 +222,18 @@ class FrameActivity_Actions {
 				SairCons.println("正在下载: " + target);
 				download(target, jar);
 			} else if (target.startsWith("file:/")) {
+				// 来源2:file:/ URL——还原为本地File
 				jar = new File(new URL(target).toURI());
 			} else {
+				// 来源3:本地路径——直接按File处理
 				jar = new File(target);
 			}
+			// 统一校验:文件存在且.jar后缀(不区分大小写),否则拒绝加载
 			if (!jar.exists() || !jar.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".jar")) {
 				SairCons.println(FCM.Error_Color, "不是有效的jar: " + target);
 				return false;
 			}
+			// 校验通过:交给LoaderManager执行加载
 			return LoaderManager.loadOneExecJar(jar.getAbsolutePath());
 		} catch (Exception e) {
 			SairCons.println(FCM.Error_Color, "load fail : " + e);
@@ -256,6 +264,7 @@ class FrameActivity_Actions {
 	 * http(s)脚本先下载到缓存目录(见resolveIrFile)。
 	 */
 	void ir(String fileName) throws Exception {
+		// 参数为空:列出正在运行的ir脚本(irpool快照,加锁防并发修改)
 		if ("".equals(fileName) || null == fileName) {
 			Set<String> list;
 			synchronized (IRRunnable.irpool) {
@@ -272,6 +281,7 @@ class FrameActivity_Actions {
 		fileName = ToolPack.pathRepack(fileName)[0];
 		File irFile = resolveIrFile(fileName);
 		List<String> allLines = readIrFile(irFile.getAbsolutePath());
+		// 构造IR任务并以新线程启动
 		IRRunnable irr = new IRRunnable(allLines, fileName);
 		Thread th = new Thread(irr);
 		irr.setMyThread(th);
@@ -284,8 +294,10 @@ class FrameActivity_Actions {
 	private static List<String> readIrFile(String fileName) throws IOException {
 		Path p = Paths.get(fileName);
 		try {
+			// 第1步:优先UTF-8整读
 			return Files.readAllLines(p, StandardCharsets.UTF_8);
 		} catch (CharacterCodingException cce) {
+			// 第2步:UTF-8编码非法(如记事本ANSI保存)时回退GB18030(GBK超集,覆盖生僻字)
 			return Files.readAllLines(p, Charset.forName("GB18030"));
 		}
 	}
@@ -421,6 +433,7 @@ class FrameActivity_Actions {
 		String[] RGB_S = args.split(" ");
 		if (RGB_S.length < 3)
 			return null;
+		// 前3个空格分隔字段依次为R/G/B,非法值按0处理
 		int[] RGB_I = new int[3];
 		for (int i = 0; i < 3; i++)
 			try {

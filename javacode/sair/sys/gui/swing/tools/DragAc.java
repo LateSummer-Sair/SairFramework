@@ -22,8 +22,9 @@ import java.awt.dnd.DropTarget;
  * setDropTarget 覆盖默认目标，不得复用。
  * </p>
  * <p>
- * <b>线程安全 / EDT 说明：</b>建议在 EDT 调用（AWT 组件/事件注册）；DropTarget 的
- * 回调（{@code DragAcAdapter#drop}）由 DnD 事件派发线程执行，与 EDT 分离。
+ * <b>线程说明：</b>AWT 事件回调由系统在 EDT 派发，回调内同步直接执行；
+ * DropTarget 的 DnD 回调（{@code DragAcAdapter#drop}）同样由系统在 EDT 派发
+ * （DnD 规范保证回调在 EDT 或与 EDT 同步），回调内同步直接执行。
  * </p>
  * <p>
  * <b>二进制兼容约束：</b>类与方法均为包私有，但 {@link Clicks} 以编译期调用依赖，

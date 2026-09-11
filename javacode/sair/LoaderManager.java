@@ -42,7 +42,8 @@ import sair.user.Activity;
  *     由 Safe 工厂创建(基础单操作同步);{@link #loadExecJar}/{@link #loadLibJar}
  *     在对应集合监视器上把"查重+建loader+登记"整体原子化,并发/load 同一 jar
  *     不会产生双 loader 或共享 loader 被误卸载;</li>
- * <li>Phase A 预登记与 Phase C 串行实例化在主线程执行(保证目录顺序确定);</li>
+ * <li>启动管线中 Phase A 预登记与 Phase C 串行实例化在主线程执行(保证目录顺序确定);
+ *     运行时 {@link #loadOneExecJar} 在调用线程执行同一管线;</li>
  * <li>Phase B 由固定线程池({@link #MAX_LOAD_THREADS} 上限)并行 loadClass:
  *     类加载器已 registerAsParallelCapable,findClass 内部对 jars 映射与单个
  *     JarFile 加锁,且 loadClass 纯内存、无构造器副作用,可安全并行;</li>
@@ -107,14 +108,17 @@ public class LoaderManager {
 	public static boolean loadExecJar(String filePath) throws IOException {
 		// 修复:查重+建loader+登记整体原子,并发/load同一jar不会产生双loader或共享loader被误卸载
 		synchronized (execJarPathSet) {
-			if (!execJarPathSet.contains(filePath)) {
-				File file = new File(filePath);
+			// 修复:路径规范化(canonical,Windows大小写/分隔符统一)——同一jar的不同写法只登记一次,
+			// URL键与Acti.getURL()的规范化URL一致,卸载时才能按同一键命中清理
+			String canonPath = canonicalPath(filePath);
+			if (!execJarPathSet.contains(canonPath)) {
+				File file = new File(canonPath);
 				URL url = file.toURI().toURL();
 				ExectionLoader exel = new ExectionLoader();
 				exel.addJarFiles(file);
 
 				ExecLoaders.put(url, exel);
-				execJarPathSet.add(filePath);
+				execJarPathSet.add(canonPath);
 
 				return true;
 			}
@@ -131,15 +135,39 @@ public class LoaderManager {
 	 * @throws IOException 文件非法或打开失败
 	 */
 	public final static boolean loadLibJar(String filePath) throws IOException {
-		// 修复:与loadExecJar一致,查重+加载+登记原子化
+		// 修复:与loadExecJar一致,查重+加载+登记原子化,且路径规范化(同一jar不同写法不重复登记)
 		synchronized (libJarPathSet) {
-			if (!libJarPathSet.contains(filePath)) {
-				File file = new File(filePath);
+			String canonPath = canonicalPath(filePath);
+			if (!libJarPathSet.contains(canonPath)) {
+				File file = new File(canonPath);
 				((SairLoader) loader).addJarFiles(file);
-				libJarPathSet.add(filePath);
+				libJarPathSet.add(canonPath);
 				return true;
 			}
 			return false;
+		}
+	}
+
+	/**
+	 * 路径规范化(公开静态工具,Exection/Mod/Acti共用):canonicalFile(Windows下统一
+	 * 大小写与分隔符、解析相对路径与"..")→失败兜底absolute。
+	 * 登记表与URL键统一使用规范化路径,避免同一jar的多种写法(大小写/斜杠/相对路径)
+	 * 造成登记分叉(残留条目、重载误拒、卸载漏清)。
+	 *
+	 * @param path 原始路径
+	 * @return 规范化后的绝对路径字符串
+	 */
+	public static String canonicalPath(String path) {
+		File f = new File(path);
+		try {
+			String canon = f.getCanonicalFile().getPath();
+			// Windows:盘符统一大写(GetFullPathName保留输入盘符大小写,canonical不修正)
+			if (File.separatorChar == '\\' && canon.length() >= 2 && canon.charAt(1) == ':')
+				canon = Character.toUpperCase(canon.charAt(0)) + canon.substring(1);
+			return canon;
+		} catch (Exception e) {
+			// 规范化失败(罕见,路径非法/IO错误):回退absolute(与旧版行为一致)
+			return f.getAbsolutePath();
 		}
 	}
 
@@ -162,10 +190,13 @@ public class LoaderManager {
 	public static Activity loadMain(String className, ClassLoader loader)
 			throws ClassNotFoundException, InstantiationException, IllegalAccessException, NoClassDefFoundError {
 
+		// 第一步:用指定加载器加载主类
 		Class<?> clazz = loader.loadClass(className);
 
+		// 第二步:校验是否为Activity子类(不是则按类文件错误抛出)
 		if (Activity.class.isAssignableFrom(clazz)) {
 
+			// 第三步:实例化
 			// Java17兼容写法:替代已废弃的Class.newInstance(),并保留旧版"构造器异常原样抛出"语义
 			Activity acti;
 			try {
@@ -201,14 +232,18 @@ public class LoaderManager {
 	 */
 	public static boolean loadOneExecJar(String path) {
 		try {
-			if (execJarPathSet.contains(path)) {
+			// 第一步:查重——已登记的插件直接拒绝(红字提示);路径规范化,与登记键一致
+			if (execJarPathSet.contains(canonicalPath(path))) {
 				SairCons.println(FCM.Error_Color, "插件已加载: " + path);
 				return false;
 			}
+			// 第二步:Phase A 预登记(读ACT清单+建ExectionLoader,不加载类);失败返回false
 			Exection ex = preRegisterExec(path);
 			if (ex == null)
 				return false;
+			// 第三步:Phase B 并行加载类(纯内存,无构造器副作用)
 			ex.parallelLoadClasses();
+			// 第四步:Phase B 失败→卸载该插件(释放jar句柄)并返回false
 			if (ex.hasLoadError()) {
 				try {
 					ex.unLoadJar();
@@ -217,7 +252,9 @@ public class LoaderManager {
 				SairCons.println(FCM.Error_Color, path + " -> load fail : " + errorInfo(ex.getLoadError()));
 				return false;
 			}
+			// 第五步:Phase C 串行实例化+注册+日志
 			ex.serialInstantiate();
+			// 第六步:Phase C 失败→卸载该插件并返回false(绝不让半初始化插件残留)
 			if (ex.hasLoadError()) {
 				try {
 					ex.unLoadJar();
@@ -226,8 +263,10 @@ public class LoaderManager {
 				SairCons.println(FCM.Error_Color, path + " -> load fail : " + errorInfo(ex.getLoadError()));
 				return false;
 			}
+			// 全部阶段通过:登记成功
 			return true;
 		} catch (Throwable e) {
+			// 兜底:任意未预期异常一律按加载失败处理(红字打印异常链)
 			SairCons.println(FCM.Error_Color, path + " -> load fail : " + errorInfo(e));
 			return false;
 		}
@@ -257,6 +296,7 @@ public class LoaderManager {
 		for (String p : paths) {
 			// 修复:扩展名大小写不敏感(Locale.ROOT),Linux上.JAR插件不再被忽略
 			if (p.toLowerCase(java.util.Locale.ROOT).endsWith(".jar")) {
+				// Phase A:预登记(读ACT清单+建独立loader);失败(红字提示)不进任务列表
 				Exection ex = preRegisterExec(p);
 				if (ex != null)
 					tasks.add(ex);
@@ -264,6 +304,7 @@ public class LoaderManager {
 		}
 
 		if (tasks.size() > 1 && MAX_LOAD_THREADS > 1) {
+			// 任务数充足:固定线程池并行执行Phase B,等全部Future完成后再shutdown
 			ExecutorService pool = Executors.newFixedThreadPool(Math.min(MAX_LOAD_THREADS, tasks.size()));
 			try {
 				ArrayList<Future<?>> futures = new ArrayList<Future<?>>();
@@ -282,6 +323,7 @@ public class LoaderManager {
 				pool.shutdown();
 			}
 		} else {
+			// 任务过少或并行度关闭:调用线程顺序执行Phase B(结果等价)
 			for (Exection ex : tasks)
 				ex.parallelLoadClasses();
 		}
@@ -293,12 +335,14 @@ public class LoaderManager {
 
 		// Phase C: 串行实例化+注册+日志(顺序与旧版一致)
 		for (Exection ex : tasks) {
+			// 并行阶段(含重试后)仍失败:红字提示并卸载(释放jar句柄与类加载器)
 			if (ex.hasLoadError()) {
 				SairCons.println(FCM.Error_Color, ex.getPath() + " -> load fail : " + errorInfo(ex.getLoadError()));
 				// 修复:加载失败的插件同样卸载,释放jar句柄与类加载器(旧行为残留导致Windows文件锁死)
 				unloadFailed(ex);
 				continue;
 			}
+			// 实例化+注册+日志;实例化阶段失败同样卸载,绝不让半初始化插件残留
 			ex.serialInstantiate();
 			if (ex.hasLoadError()) {
 				SairCons.println(FCM.Error_Color, ex.getPath() + " -> load fail : " + errorInfo(ex.getLoadError()));
@@ -331,29 +375,36 @@ public class LoaderManager {
 	private static Exection preRegisterExec(String path) {
 		JarFile jar = null;
 		try {
-			jar = new JarFile(path);
+			// 第一步:打开jar并读Manifest的ACT条目(每个jar只打开一次;统一走openJar,JDK9+支持MR-JAR)
+			jar = SairBaseLoader.openJar(new File(path));
 			Manifest mf = jar.getManifest();
 			Attributes ab = mf == null ? null : mf.getMainAttributes();
 			String infomations = ab == null ? null : ab.getValue("ACT");
+			// 第二步:ACT缺失→红字提示,该插件被剔除(返回null)
 			if (infomations == null) {
 				SairCons.println(FCM.Error_Color, path + " -> ACT_infomations notFound!");
 				return null;
 			}
+			// 第三步:按";"拆分主类名并过滤空段
 			String[] sp_ed = infomations.split(";");
 			ArrayList<String> localList = new ArrayList<String>();
 			for (String clazzName : sp_ed)
 				if (clazzName != null && !"".equals(clazzName) && clazzName.length() > 0)
 					localList.add(clazzName);
+			// 第四步:拆分后为空→红字提示,该插件被剔除(返回null)
 			if (localList.size() == 0) {
 				SairCons.println(FCM.Error_Color, path + " -> ACT_infomations notFound!");
 				return null;
 			}
+			// 第五步:Phase A 登记(仅开jar+建ExectionLoader,不加载类),返回未实例化的Exection
 			String[] classNames = localList.toArray(new String[localList.size()]);
 			return Exection.preRegister(classNames, path);
 		} catch (Exception e) {
+			// 清单/路径非法→红字提示,该插件被剔除(返回null)
 			SairCons.println(FCM.Error_Color, path + " -> ACT_infomations or ClassInfo is Error!");
 			return null;
 		} finally {
+			// 无论如何关闭本次打开的JarFile(失败静默)
 			if (jar != null)
 				try {
 					jar.close();
@@ -373,6 +424,7 @@ public class LoaderManager {
 			path_File.mkdirs();
 		ArrayList<String> paths = ToolPack.getAllFilesPath(path_File, true);
 		for (String p : paths) {
+			// 仅挂载.jar依赖库(扩展名大小写不敏感);单个失败不中断(红字提示)
 			if (p.toLowerCase(java.util.Locale.ROOT).endsWith(".jar"))
 				toMod(p);
 		}
@@ -447,8 +499,9 @@ public class LoaderManager {
 		String name = null;
 		JarFile jar = null;
 		try {
-			// 性能优化:启动期每个jar只打开一次(原实现读NAME/DIR各开一次、加载器再开一次)
-			jar = new JarFile(path);
+			// 性能优化:启动期每个jar只打开一次(原实现读NAME/DIR各开一次、加载器再开一次);
+			// 统一走openJar,JDK9+支持MR-JAR(多版本jar的getManifest仍返回base清单,语义正确)
+			jar = SairBaseLoader.openJar(new File(path));
 			Manifest mf = jar.getManifest();
 			if (mf != null) {
 				Attributes ab = mf.getMainAttributes();
@@ -463,8 +516,10 @@ public class LoaderManager {
 				} catch (IOException e) {
 				}
 		}
+		// NAME/DIR齐全时登记到SairLoader.mainMap(供getMOD_MEAT_INFFILE查询)
 		if (null != dirs && null != name)
 			SairLoader.mainMap.put(name, dirs);
+		// Mod构造器把jar挂到全局SairLoader并登记Libraries.mods;失败仅红字提示
 		try {
 			new Mod(path);
 		} catch (Throwable e) {
@@ -506,33 +561,44 @@ public class LoaderManager {
 		InputStream resURL = null;
 
 		Collection<File> ul = null;
+		// 空资源名直接返回null
 		if (classPathInJar == null)
 			return null;
+		// 归一化:去掉开头"/"(与ClassLoader资源名约定一致)
 		if (classPathInJar.startsWith("/"))
 			classPathInJar = classPathInJar.substring(1);
 		try {
+			// 取该加载器挂载jar的快照列表(遍历期间不受并发卸载影响)
 			ul = loader.getAllJarFile();
 		} catch (SecurityException | IllegalArgumentException e) {
 			SairCons.print(FCM.Error_Color, "CLASSLOASDER IS ERROR!!!");
 			return null;
 		}
+		// 按jar挂载顺序逐个查找,返回第一个命中条目
 		for (File file : ul) {
 			try {
 				JarFile jf;
+				// 与SairBaseLoader同一套锁:先锁jars映射取JarFile
 				synchronized (loader.jars) {
 					jf = loader.jars.get(file);
 				}
 				if (jf == null)
 					continue;
-				ZipEntry ze;
+				// 锁单个JarFile内完成"取条目+开流"整段:与removeJarURL的关闭互斥,
+				// 开流期间句柄不会被并发关闭(消除读到一半抛IllegalStateException的竞态)
 				synchronized (jf) {
-					ze = jf.getEntry(classPathInJar);
+					try {
+						ZipEntry ze = jf.getEntry(classPathInJar);
+						if (ze != null)
+							resURL = jf.getInputStream(ze);
+					} catch (IllegalStateException ise) {
+						// 兜底:jar刚被并发卸载关闭,视同未命中,继续查下一个
+					}
 				}
-				if (ze != null)
-					resURL = jf.getInputStream(ze);
 				if (resURL != null)
 					return resURL;
 			} catch (IOException e) {
+				// 单个jar读取失败:跳过继续查下一个
 			}
 		}
 		return null;

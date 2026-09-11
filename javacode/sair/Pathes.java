@@ -22,8 +22,9 @@ import sair.sys.tools.ToolPack;
  *     {@link #dataResDir}、{@link #libDir} 被框架与旧插件广泛引用);</li>
  * <li>{@link #bootDir}/{@link #modDir} 已 @deprecated 合并至 {@link #libDir},
  *     但字段必须保留以兼容旧插件引用;</li>
- * <li>{@link #pack_repack_space}("//")是路径打包/还原协议的一部分,值不可改,
- *     否则 autorun 路径还原会错乱;</li>
+ * <li>{@link #pack_repack_space}("//")是旧版路径打包/还原协议的遗留占位符:
+ *     当前 ToolPack.pathRepack 已改为引号段提取、不再使用本常量,字段保留仅为
+ *     兼容旧插件引用(二进制兼容),不可删除;</li>
  * <li>已注释掉的 staticfilesDir 不得恢复为生效代码(该目录已废弃)。</li>
  * </ul>
  */
@@ -76,8 +77,9 @@ public class Pathes {
 	 */
 	public static final String dataResDir = ToolPack.getPath() + File.separator + "data" + File.separator;
 	/**
-	 * 路径打包/还原协议的转义占位符("//"):ToolPack.pathRepack 用它替换真实
-	 * 路径分隔符,值不可改
+	 * 旧版路径打包/还原协议的转义占位符("//"):当前 ToolPack.pathRepack
+	 * 已改为引号段提取、不再使用本常量;字段保留仅为兼容旧插件引用
+	 * (二进制兼容,不可删除)
 	 */
 	public static final String pack_repack_space = "//";
 

@@ -75,7 +75,7 @@ loop {
 
         <pre><code><span class="cmt">// 定义变量</span>
 /var-add name Sair
-/var-add version 5.3
+/var-add version 0.6.1
 
 <span class="cmt">// 使用变量</span>
 /println 作者: %name%
@@ -111,7 +111,8 @@ loop {
 
         <div class="info-box tip">
             <div class="info-box-title">💡 自动执行</div>
-            <p>SFW 启动时如果没有传入参数，会自动在 <code>data/framework/</code> 下查找并执行 <code>autorun.ir</code> 文件。你可以在此文件中编写启动时需要自动执行的任务。</p>
+            <p>SFW 启动时<strong>永远先执行</strong> <code>data/framework/</code> 下的 <code>autorun.ir</code> 文件（不存在时自动创建空文件）。你可以在此文件中编写启动时需要自动执行的任务。</p>
+            <p>如果启动时传入了外部 .ir 文件（如双击关联的 .ir），则 <code>autorun.ir</code> <strong>完整执行结束后</strong>，外部脚本才会开始执行。</p>
         </div>
     </div>
 
@@ -127,7 +128,7 @@ loop {
             <li>创建一个类继承 <code>sair.user.SpliterSPI</code></li>
             <li>实现 <code>getSpliter(String cmd)</code> 返回自定义的 <code>Spliter</code> 实现</li>
             <li>实现 <code>getUninstallCMD()</code> 返回卸载此解析器的命令</li>
-            <li>将编译后的类放入 <code>plugins/modlib/</code></li>
+            <li>将编译后的类放入 <code>plugins/lib/</code></li>
             <li>在 SFW 控制台输入 <code>/setspliter 类全限定名</code> 安装自定义解析器</li>
         </ol>
 
@@ -151,31 +152,28 @@ loop {
 }</code></pre>
     </div>
 
-    <!-- 三个插件目录 -->
+    <!-- 插件目录 -->
     <h2 class="ani-fade-in-up ani-delay-1">📂 插件目录详解</h2>
 
     <div class="card ani-fade-in-up ani-delay-2">
-        <div class="card-title"><span class="card-icon">📁</span> 三个 plugins 子目录的用途</div>
+        <div class="card-title"><span class="card-icon">📁</span> plugins 子目录的用途</div>
 
-        <h3>1. <code>plugins/bootlib/</code> — 系统级依赖</h3>
-        <p>此目录中的 JAR 使用<strong>系统 ClassLoader</strong> 加载。适合放入需要对 JVM 功能进行修补、需要线程上下文操作或 SPI 机制的库。</p>
-        <div class="info-box warn">
-            <div class="info-box-title">⚠️ 注意</div>
-            <p>Java 8 以上版本中，bootlib 中的 JAR 无法被热卸载（需要重启 JVM）。Java 8 可以热卸载。</p>
+        <h3>1. <code>plugins/lib/</code> — 统一依赖库</h3>
+        <p>此目录中的 JAR 使用 <code>SairLoader</code>（自定义 ClassLoader）加载。所有第三方依赖（如 <code>SaComS.jar</code>、<code>gson</code>、<code>sqlite-jdbc</code>、<code>jsoup</code> 等）都放在这里。</p>
+        <div class="info-box tip">
+            <div class="info-box-title">💡 SPI 能力</div>
+            <p>框架执行插件命令时会自动设置线程上下文类加载器，因此 <code>ServiceLoader</code>、<code>DriverManager</code>（SQL 驱动）、<code>AudioSystem</code>（音频编解码器）等机制可以直接发现此目录中 JAR 的 <code>META-INF/services</code> 实现，不再需要把依赖交给系统类加载器。</p>
         </div>
-
-        <h3>2. <code>plugins/modlib/</code> — 普通依赖库</h3>
-        <p>此目录中的 JAR 使用 <code>SairLoader</code>（自定义 ClassLoader）加载。适合放入普通的第三方依赖库，如 <code>SaComS.jar</code>、<code>gson</code> 等。</p>
         <p>可以随时通过 <code>SairLoader.removeJarFiles()</code> 热卸载。</p>
 
-        <h3>3. <code>plugins/exection/</code> — 插件本体</h3>
+        <h3>2. <code>plugins/exection/</code> — 插件本体</h3>
         <p>此目录存放你开发的插件 JAR。<strong>每个插件使用独立的 <code>ExectionLoader</code></strong> 加载，实现插件间类隔离。</p>
         <p>插件必须包含带有 <code>ACT</code> 声明的 <code>MANIFEST.MF</code> 文件。</p>
     </div>
 
     <div class="card ani-fade-in-up ani-delay-2">
         <div class="card-title"><span class="card-icon">🔄</span> Mod 依赖库的特殊机制</div>
-        <p>Mod 类型的 JAR（放入 modlib 的库）如果在其 MANIFEST.MF 中声明了 <code>NAME</code> 和 <code>DIR</code> 属性，可以被其他插件通过 <code>SairLoader.getMOD_MEAT_INFFILE(name)</code> 获取其内部资源路径。</p>
+        <p>Mod 类型的 JAR（放入 lib 的库）如果在其 MANIFEST.MF 中声明了 <code>NAME</code> 和 <code>DIR</code> 属性，可以被其他插件通过 <code>SairLoader.getMOD_MEAT_INFFILE(name)</code> 获取其内部资源路径。</p>
         <pre><code><span class="cmt">// MANIFEST.MF 示例</span>
 <span class="cmt">Manifest-Version: 1.0</span>
 <span class="kw">NAME</span>: <span class="typ">MyLib</span>;
@@ -200,7 +198,7 @@ loop {
                 </tr>
                 <tr>
                     <td><code>java -jar SFW.jar "路径.ir"</code></td>
-                    <td>启动并自动执行指定的 IR 脚本文件</td>
+                    <td>先完整执行 <code>autorun.ir</code>，结束后自动执行指定的 IR 脚本文件</td>
                 </tr>
                 <tr>
                     <td>双击 <code>.ir</code> 文件</td>
@@ -266,7 +264,7 @@ loop {
 <span class="kw">public class</span> <span class="typ">测试组件主函数</span> <span class="kw">extends</span> <span class="typ">Activity</span> {
     <span class="cmt">// ...</span>
 }</code></pre>
-        <p>配合 <code>plugins/modlib/中文代码组件支持包.jar</code> 可以实现全中文编程。</p>
+        <p>配合 <code>plugins/lib/中文代码组件支持包.jar</code> 可以实现全中文编程。</p>
     </div>
 
     <hr class="gradient-divider">

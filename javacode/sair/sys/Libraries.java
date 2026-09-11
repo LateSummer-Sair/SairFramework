@@ -64,21 +64,23 @@ public final class Libraries {
      * @return 分配到的唯一组件名
      */
     public static String setActivityName(String actiPath) {
+        // 步骤1:取jar文件名(去扩展名)为基名
         final String name = new File(actiPath).getName().split("\\.")[0];
 
         synchronized (actiNameRulMana) {
             Integer actiRul_ID = actiNameRulMana.get(name);
 
+            // 步骤2:首次使用——登记-1并直接返回基名
             if (actiRul_ID == null) {
                 actiNameRulMana.put(name, -1);
                 return name;
             }
 
-            // 修复:名称已被释放(热卸载后的重载)时直接复用原名,避免无意义的后缀累计
+            // 步骤3:名称已被释放(热卸载后的重载)且activities中不再占用时复用原名,避免无意义的后缀累计
             if (actiRul_ID.intValue() < 0 && !Libraries.activities.containsKey(name))
                 return name;
 
-            // 自愈式防碰撞:从计数器开始逐个探测,跳过实际被占用的名称
+            // 步骤4:自愈式防碰撞——从计数器开始逐个探测,跳过实际被占用的名称,返回第一个空闲的"基名+序号"
             while (true) {
                 actiRul_ID++;
                 actiNameRulMana.put(name, actiRul_ID);

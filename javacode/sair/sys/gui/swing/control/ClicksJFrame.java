@@ -12,14 +12,14 @@ import sair.sys.gui.swing.tools.Clicks;
  * 架构角色:SFrame的父类;构造时经Clicks.CLICKS_TOOLS.setClicks(this)挂接按下/拖动/释放监听
  * (FrameMouseAdapter/FrameMouseMotionAdapter)。
  * <p>
- * 线程安全:X/Y仅EDT(鼠标事件线程)读写;无其他共享状态。
+ * 线程安全:X/Y仅鼠标事件回调读写(系统在EDT派发:FrameMouseAdapter按下写入、FrameMouseMotionAdapter拖动读取);无其他共享状态。
  * <p>
  * 二进制兼容:无参构造器与ClicksI的坐标方法签名保持稳定。
  */
 public class ClicksJFrame extends JFrame implements ClicksI {
 
     private static final long serialVersionUID = 541564616456487L;
-    /** 鼠标按下时的组件相对坐标(拖动定位基准;仅EDT读写) */
+    /** 鼠标按下时的组件相对坐标(拖动定位基准;FrameMouseAdapter按下回调写入,FrameMouseMotionAdapter拖动读取) */
     private int X, Y;
 
     /** 构造:注册按下/拖动/释放监听(经Clicks工具类) */

@@ -5,7 +5,7 @@ import java.awt.Color;
 /**
  * 全局颜色常量表。
  * <p>
- * 职责:集中定义控制台/UI 各输出场景(加载 boot/exection/mod 日志、错误、
+ * 职责:集中定义控制台/UI 各输出场景(依赖库/插件加载日志、错误、
  * 分割线、路径提示、帮助等)所用的 java.awt.Color,供 SairCons/ConsFrame 等使用。
  * <p>
  * 架构角色:纯常量容器,无逻辑;插件可直接读写这些字段来定制配色。
@@ -19,7 +19,8 @@ import java.awt.Color;
  */
 public class FCM {
     /**
-     * 加载 bootlib(旧目录)时的日志颜色(默认黑)
+     * 历史遗留字段:旧版加载 bootlib(现与 modlib 合并为 lib)时的日志颜色(默认黑)。
+     * 当前框架代码已不再读取本字段,保留仅为兼容旧插件引用/定制配色(二进制兼容,不可删除)
      */
     public static Color loadBoot_Color = Color.BLACK;
     /**
@@ -27,7 +28,7 @@ public class FCM {
      */
     public static Color loadExection_Color = Color.ORANGE;
     /**
-     * 加载 mod 依赖库时的日志颜色(默认白)
+     * 加载依赖库(mod,现统一为 lib)时的日志颜色(默认白)
      */
     public static Color loadMod_Color = Color.WHITE;
 

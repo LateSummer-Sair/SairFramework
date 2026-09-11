@@ -24,12 +24,12 @@ import sair.sys.gui.swing.tools.BufferedImageTool;
  * 边框按钮由 BorderButton.setDefaultBorderButtons 生成;ConsFrame 直接继承本类。
  * 此版本可在WindowBuilder内显示并编辑。
  * <p>
- * 线程安全与EDT纪律:
+ * 线程安全与线程模型(已彻底弃用EDT调度):
  * <ul>
- * <li>{@link #setVisible(boolean)} 的淡入动画由EDT Timer驱动(不再后台线程操作窗口);</li>
- * <li>{@link #selectBgimg()} 的Robot截屏在EDT同步执行:窗体临时隐藏、finally恢复显示(异常不再残留隐藏),
+ * <li>{@link #setVisible(boolean)} 的淡入动画由后台守护线程(sfw-fade)驱动——从可见下限0.3f起步,每5ms+0.02递增到目标值;隐藏时立即interrupt该线程并复位running(不再用EDT Timer);</li>
+ * <li>{@link #selectBgimg()} 用Robot截屏做3x3卷积高斯模糊:窗体临时隐藏、finally恢复显示(异常不再残留隐藏),
  * 截屏失败(无合成器/Wayland/无权限)仅打印一次性警告(robotWarned);</li>
- * <li>{@link #setFloat(float)} 经 Backgrounds.BG_TOOLS 设置窗体不透明度,仅EDT调用。</li>
+ * <li>{@link #setFloat(float)} 记录旧值后经 Backgrounds.BG_TOOLS 设置窗体不透明度,调用线程直接执行。</li>
  * </ul>
  * <p>
  * 二进制兼容约束:公开/受保护方法签名不可改——getCenter/set/selectBgimg/setcenterNULL/getFloat/
@@ -43,6 +43,7 @@ import sair.sys.gui.swing.tools.BufferedImageTool;
  **/
 public class SFrame extends ClicksJFrame {
 	private static final long serialVersionUID = 6784222247951450980L;
+	/** 框架logo静态图标(类加载时解码一次,解码失败为null) */
 	private static final Image ICON = getIcon();
 	/**
 	 * 默认的中心空间（JPanel）
@@ -112,11 +113,15 @@ public class SFrame extends ClicksJFrame {
 	 *            窗体纵向高度
 	 **/
 	protected void set(int w, int h) {
+		// 第1步:按参数定窗体尺寸并居中到屏幕
 		setBounds(0, 0, w, h);
 		setLocationRelativeTo(null);
+		// 第2步:安装logo图标(缺失时跳过)
 		if (ICON != null)
 			setIconImage(ICON);
+		// 第3步:去掉系统边框(自绘风格)
 		setUndecorated(true);
+		// 第4步:生成边框按钮集(最小化/关闭等,由BorderButton工具创建)
 		borders = BorderButton.setDefaultBorderButtons(this);
 
 	}
@@ -124,27 +129,32 @@ public class SFrame extends ClicksJFrame {
 	/**
 	 * 高斯模糊背景:临时隐藏窗体→Robot截屏→3x3卷积核模糊→写入中心A_JPanel→finally恢复显示。
 	 * 仅在高斯模糊开关(isOpenSetting)打开且中心面板为A_JPanel时生效;截屏失败一次性警告(robotWarned)。
-	 * 仅EDT调用。
+	 * 由 setOpenSetting(true) 调用,调用线程直接执行。
 	 **/
 	public void selectBgimg() {
 		if (this.getCenter() instanceof A_JPanel && this.isOpenSetting) {
 			try {
+				// 第1步:记录窗体位置(截屏区域以此定位)
 				Point p = this.getLocation();
+				// 第2步:临时隐藏窗体,避免截到自身(截到的即窗后的桌面内容)
 				super.setVisible(false);
 				try {
+					// 第3步:Robot截取窗体区域屏幕内容
 					Robot rbt = new Robot();
 					BufferedImage background = rbt.createScreenCapture(new Rectangle((int) p.getX() + 1,
 							(int) p.getY() + 1, this.getWidth() - 2, this.getHeight() - 2));
 
+					// 第4步:3x3卷积核(近似高斯)模糊
 					float[] data = { 0.0625f, 0.125f, 0.0625f, 0.125f, 0.125f, 0.125f, 0.0625f, 0.125f, 0.0625f, };
 					Kernel kernel = new Kernel(3, 3, data);
 					ConvolveOp co = new ConvolveOp(kernel, ConvolveOp.EDGE_NO_OP, null);
 					BufferedImage background2 = co.filter(background, null);
+					// 第5步:写入中心A_JPanel并重绘("毛玻璃"背景)
 					ImageIcon bg = new ImageIcon(background2);
 					((A_JPanel) this.getCenter()).setImg(bg.getImage());
 					((A_JPanel) this.getCenter()).repaint();
 				} finally {
-					// 修复:模糊处理异常时窗体不会再保持隐藏状态
+					// 第6步:finally恢复显示——模糊处理异常时窗体不再残留隐藏
 					super.setVisible(true);
 				}
 			} catch (Exception ex) {
@@ -158,7 +168,7 @@ public class SFrame extends ClicksJFrame {
 	}
 
 	/**
-	 * 清除中心面板背景图并重绘(拖动窗体时临时清图用);仅EDT调用。
+	 * 清除中心面板背景图并重绘(拖动窗体时临时清图用);由FrameMouseMotionAdapter拖动回调调用(系统在EDT派发的鼠标事件)。
 	 **/
 	public void setcenterNULL() {
 		if (this.getCenter() instanceof A_JPanel && this.isOpenSetting) {
@@ -168,7 +178,7 @@ public class SFrame extends ClicksJFrame {
 	}
 
 	/**
-	 * 获取目标不透明度(淡入动画的终点值);仅EDT调用。
+	 * 获取目标不透明度(淡入动画的终点值;淡入线程与拖动流程读取)。
 	 *
 	 * @return 当前目标不透明度
 	 **/
@@ -177,7 +187,7 @@ public class SFrame extends ClicksJFrame {
 	}
 
 	/**
-	 * 设置窗体不透明度:记录旧值到upFloted后经Backgrounds.BG_TOOLS应用新值;仅EDT调用。
+	 * 设置窗体不透明度:记录旧值到upFloted后经Backgrounds.BG_TOOLS应用新值;调用线程直接执行。
 	 *
 	 * @param f 新不透明度
 	 **/
@@ -188,7 +198,7 @@ public class SFrame extends ClicksJFrame {
 	}
 
 	/**
-	 * 获取设置新透明度前的旧值(拖动结束恢复用);仅EDT调用。
+	 * 获取设置新透明度前的旧值(拖动结束恢复用;FrameMouseAdapter释放回调经此恢复——系统在EDT派发的鼠标事件)。
 	 **/
 	public float getUpFloted() {
 		return upFloted;
@@ -250,11 +260,14 @@ public class SFrame extends ClicksJFrame {
 	public <T> T setOpenSetting(boolean isOpenSetting) {
 		this.isOpenSetting = isOpenSetting;
 		if (isOpenSetting)
+			// 打开:立即抓屏做高斯模糊背景
 			selectBgimg();
 		else if (this.getCenter() instanceof A_JPanel) {
+			// 关闭:清空中心面板背景图并重绘
 			((A_JPanel) this.getCenter()).setImg(null);
 			((A_JPanel) this.getCenter()).repaint();
 		}
+		// 返回自身供链式调用(泛型强转兼容旧调用方)
 		return (T) this;
 	}
 

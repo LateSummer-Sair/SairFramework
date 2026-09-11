@@ -38,6 +38,7 @@ public final class Safe {
 	 * @return 单操作同步的 HashMap;遍历/复合操作需调用方外部同步
 	 */
 	public static <K, V> HashMap<K, V> map() {
+		// 匿名子类:仅基础单操作加synchronized;返回类型仍为HashMap(保字段描述符)
 		return new HashMap<K, V>() {
 			private static final long serialVersionUID = 1L;
 
@@ -87,6 +88,7 @@ public final class Safe {
 	 * @return 单操作同步的 HashSet;遍历/复合操作需调用方外部同步
 	 */
 	public static <E> HashSet<E> set() {
+		// 匿名子类:仅基础单操作加synchronized;返回类型仍为HashSet(保字段描述符)
 		return new HashSet<E>() {
 			private static final long serialVersionUID = 1L;
 
@@ -124,6 +126,7 @@ public final class Safe {
 	 * @return 单操作同步的 ArrayList;遍历/复合操作需调用方外部同步
 	 */
 	public static <E> ArrayList<E> list() {
+		// 匿名子类:仅基础单操作加synchronized;返回类型仍为ArrayList(保字段描述符)
 		return new ArrayList<E>() {
 			private static final long serialVersionUID = 1L;
 

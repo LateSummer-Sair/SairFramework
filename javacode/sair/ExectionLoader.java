@@ -13,7 +13,7 @@ package sair;
  * 线程安全:实例由 LoaderManager 在主线程(Phase A)创建;Phase B 线程池
  * 并发调用其 loadClass/findClass,基类已 registerAsParallelCapable 且对
  * jars 映射与单个 JarFile 加锁(见 SairBaseLoader),并行加载安全;
- * 卸载由主线程在加载失败路径上执行。
+ * 卸载由加载失败路径上的调用方触发(启动管线中为主线程,运行时 /load 为调用线程)。
  * <p>
  * 二进制兼容约束(不可改):类名与父类(公开可 instanceof)不可改;构造器为
  * 包级私有且父加载器硬编码为 LoaderManager.loader,外部/插件只能通过

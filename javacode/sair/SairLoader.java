@@ -75,12 +75,14 @@ public class SairLoader extends SairBaseLoader {
 	 * 批量挂载 jar(逐个调用基类 addJarFile;null 元素与空数组安全忽略)。
 	 *
 	 * @param paths 目标 jar 文件列表
-	 * @throws IOException 任一文件存在但非 .jar 时抛出
+	 * @throws IOException 任一文件不存在或非 .jar 时抛出
 	 */
 	public final void addJarFiles(File... paths) throws IOException {
+		// 空参数安全忽略
 		if (paths == null || paths.length == 0)
 			return;
 
+		// 逐个挂载(null元素忽略;任一非jar抛出IOException)
 		for (File p : paths)
 			if (p != null)
 				super.addJarFile(p);
@@ -93,8 +95,10 @@ public class SairLoader extends SairBaseLoader {
 	 * @param urls 要卸载的 jar 文件列表;null 元素与空数组安全忽略
 	 */
 	public final void removeJarFiles(File... urls) {
+		// 空参数安全忽略
 		if (urls == null || urls.length == 0)
 			return;
+		// 逐个卸载(null元素忽略;关闭失败由基类打印stderr)
 		for (File u : urls)
 			if (u != null)
 				super.removeJarURL(u);
@@ -116,8 +120,9 @@ public class SairLoader extends SairBaseLoader {
 	 * 卸载后本实例不可继续使用;final 公开方法,签名不可改(热卸载契约)。
 	 */
 	public final void dispose() {
-		// 修复:先置死亡标记,卸载后运行中线程惰性加载类得到明确"已卸载"错误而非未定义行为
+		// 第一步:置死亡标记——卸载后运行中线程惰性加载类得到明确"已卸载"错误而非未定义行为
 		dead = true;
+		// 第二步:快照全部jar后逐个关闭,释放所有文件句柄
 		Set<File> set = snapshotJarFiles();
 		if (set.size() > 0)
 			removeJarFiles(set.toArray(new File[set.size()]));
@@ -128,8 +133,8 @@ public class SairLoader extends SairBaseLoader {
 	 * <p>
 	 * ServiceLoader、DriverManager、AudioSystem 等 SPI 机制通过线程上下文
 	 * 类加载器查找 META-INF/services 配置,设置后即可从 plugins/lib 中的
-	 * JAR 里发现 SQL 驱动/编解码器等实现。Main.firstLoad 会在 EDT 启动前
-	 * 把全局 loader 安装为默认上下文(子线程自动继承)。
+	 * JAR 里发现 SQL 驱动/编解码器等实现。Main.firstLoad 会在任何 SPI 首次
+	 * 触碰之前把全局 loader 安装为默认上下文(子线程自动继承)。
 	 *
 	 * @param loader 要安装的类加载器(可为 null,表示引导类加载器)
 	 * @return 设置前的旧上下文类加载器(用于事后恢复)
@@ -151,10 +156,13 @@ public class SairLoader extends SairBaseLoader {
 	 * @param task   要执行的任务
 	 */
 	public static void runWithThreadContext(SairLoader loader, Runnable task) {
+		// 保存旧上下文并安装目标加载器
 		ClassLoader old = setThreadContextLoader(loader);
 		try {
+			// 在目标线程上下文执行任务
 			task.run();
 		} finally {
+			// 无论成败(含异常)都恢复旧上下文
 			setThreadContextLoader(old);
 		}
 	}

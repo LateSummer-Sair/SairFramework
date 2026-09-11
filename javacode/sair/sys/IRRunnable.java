@@ -12,7 +12,7 @@ import sair.Safe;
  * {@link SairCons#runner} 执行,支持 /TO: 标签跳转与 stopIR 外部终止。
  * <p>
  * 架构角色:命令解释环节的批量执行器——脚本行复用与手工输入相同的命令解析链路,
- * 是 SFW 的"批处理"形式;每个实例绑定一个脚本名,同一时间仅允许一个同名实例运行。
+ * 是 SFW 的"脚本批量执行"形式;每个实例绑定一个脚本名,同一时间仅允许一个同名实例运行。
  * <p>
  * 线程安全说明:
  * <ul>
@@ -70,11 +70,13 @@ public class IRRunnable implements Runnable {
 	/**
 	 * 脚本主循环:按行执行主序列;BOM-only 行视为空行;
 	 * {@link #irContinue} 被置位或发生异常时退出;finally 中完成反注册——
-	 * 正常执行完毕走 stopIR(join 清理线程),被外部终止则直接从 irpool 移除。
+	 * 正常执行完毕自线程调用 stopIR(置停止标志并反注册,自线程调用跳过 join),
+	 * 被外部终止则直接从 irpool 移除。
 	 */
 	public void run() {
-		// 修复:try/finally保证任何异常路径都反注册irpool,避免Main.waitIrFinish永久挂起
+		// 步骤1:try/finally保证任何异常路径都反注册irpool,避免Main.waitIrFinish永久挂起
 		try {
+			// 步骤2:逐行执行主序列——空行跳过;停止标志置位后立即退出
 			for (String cmd : allLines) {
 				if (isNULL(cmd))
 					continue;
@@ -84,8 +86,10 @@ public class IRRunnable implements Runnable {
 					break;
 			}
 		} catch (Throwable e) {
+			// 步骤3:执行异常打印错误(不向上抛出)
 			SairCons.println(FCM.Error_Color, this.name + " -> IR执行异常:" + e);
 		} finally {
+			// 步骤4:反注册——正常完毕走stopIR(自线程,跳过join);被外部终止直接摘除
 			if (registered) {
 				if (irContinue)
 					stopIR();
@@ -96,8 +100,8 @@ public class IRRunnable implements Runnable {
 	}
 
 	/**
-	 * 标签跳转嵌套深度上限(可配置,私有常量):防止 /TO: 循环跳转无限递归耗尽栈(安全加固)。
-	 * 同时被标签预解析(toMakeLabel_0)复用为 "{" 嵌套上限。
+	 * 标签跳转嵌套深度上限(私有编译期常量,不可运行时调整):防止 /TO: 循环跳转
+	 * 无限递归耗尽栈(安全加固)。同时被标签预解析(toMakeLabel_0)复用为 "{" 嵌套上限。
 	 */
 	private static final int MAX_LABEL_DEPTH = 128;
 
@@ -113,16 +117,20 @@ public class IRRunnable implements Runnable {
 	 * finally 保证深度计数在异常路径同样恢复。
 	 */
 	private void labelRunner(String cmd) {
+		// 步骤1:空命令直接返回
 		if (cmd == null)
 			return;
+		// 步骤2:深度达到上限时打印告警并中止本次跳转
 		if (labelDepth >= MAX_LABEL_DEPTH) {
 			SairCons.println(FCM.Error_Color, "标签嵌套过深(超过MAX_LABEL_DEPTH),已中止跳转");
 			return;
 		}
+		// 步骤3:深度+1后进入单行分发
 		labelDepth++;
 		try {
 			labelRunner0(cmd);
 		} finally {
+			// 步骤4:finally恢复深度计数,异常路径同样恢复
 			labelDepth--;
 		}
 	}
@@ -133,16 +141,21 @@ public class IRRunnable implements Runnable {
 	 * 执行(不记历史)。
 	 */
 	private void labelRunner0(String cmd) {
+		// 步骤1:去除前导空白
 		cmd = ltrim(cmd);
+		// 步骤2:以"/TO:"开头视为标签跳转
 		if (cmd.startsWith(label_to)) {
+			// 步骤3:取其后标签名,空名直接返回
 			String localName = cmd.substring(label_to.length(), cmd.length());
 			if ("".equals(localName))
 				return;
+			// 步骤4:查标签表,不存在打印错误
 			IRLabel irlb = irlabels.get(localName);
 			if (irlb == null) {
 				SairCons.println(FCM.Error_Color, "没有找到名为:" + localName + "的标签入口!");
 				return;
 			}
+			// 步骤5:逐行递归执行标签块内容(行内仍可能再次/TO:)
 			List<String> lines = irlb.getLines();
 			for (String line : lines) {
 				if (isNULL(line))
@@ -151,6 +164,7 @@ public class IRRunnable implements Runnable {
 					labelRunner(line);
 			}
 		} else
+			// 步骤2':普通命令经SairCons.runner执行(不记历史)
 			SairCons.runner(false, cmd);
 	}
 
@@ -174,22 +188,31 @@ public class IRRunnable implements Runnable {
 	}
 
 	/**
-	 * 终止脚本:置停止标志并反注册 irpool;若由外部线程调用,则在独立守护线程
-	 * ("ir-joiner")中 join 执行线程最多 3 秒,超时仍存活则 interrupt。
-	 * <p>修复点:脚本自身执行完毕时跳过对自身线程的 join/中断;join 移出调用线程(EDT),
-	 * 避免 /irstop 从界面触发时冻结 GUI 最长 3 秒。
+	 * 终止脚本(分五步,可被任意线程调用):
+	 * <ol>
+	 * <li>置 {@link #irContinue} 停止标志;</li>
+	 * <li>从 irpool 反注册本脚本(外部等待方据此解除阻塞);</li>
+	 * <li>{@link #myThread} 为 null 直接返回;</li>
+	 * <li>调用方即执行线程(脚本正常执行完毕自调用)时跳过 join/中断,避免自我等待;</li>
+	 * <li>执行线程尚未中断时,起独立守护线程("ir-joiner")join 执行线程最多 3 秒,
+	 *     超时仍存活则 interrupt——join 已移出调用线程,避免界面触发 /irstop 时
+	 *     冻结调用线程(最长 3 秒)。</li>
+	 * </ol>
 	 */
 	public void stopIR() {
+		// 步骤1:置停止标志
 		irContinue = false;
+		// 步骤2:反注册irpool
 		irpool.remove(this.name);
+		// 步骤3:未注入执行线程时无需清理
 		if (myThread == null)
 			return;
-		// 修复:脚本正常执行完毕时自调用,跳过对自身线程的3秒join与自我中断
+		// 步骤4:脚本正常执行完毕自调用时跳过对自身线程的3秒join与自我中断
 		if (myThread == Thread.currentThread())
 			return;
 
 		if (!myThread.isInterrupted()) {
-			// 修复:join移出调用线程(EDT),避免/irstop从界面触发时冻结GUI最长3秒
+			// 步骤5:join移出调用线程(独立守护线程)执行,避免界面触发/irstop时冻结调用线程最长3秒
 			final Thread target = myThread;
 			final String tname = this.name;
 			Thread joiner = new Thread(new Runnable() {
@@ -258,11 +281,13 @@ public class IRRunnable implements Runnable {
 	 */
 	public IRRunnable(List<String> allLines, String name) {
 		this.name = name;
-		// 修复:putIfAbsent原子登记,消除同名并发登记的check-then-act竞态(后登记的不运行)
+		// 步骤1:剥离首行BOM后做标签预解析,得到主执行序列(标签行被原地置空)
 		this.allLines = toMakeLabel(this, stripBom(allLines));
+		// 步骤2:putIfAbsent原子登记irpool,消除同名并发登记的check-then-act竞态(后登记的不运行)
 		if (name == null || irpool.putIfAbsent(name, this) == null) {
 			registered = true;
 		} else {
+			// 步骤3:同名脚本已在运行——打印错误并置停止标志,本实例不会运行
 			SairCons.println(FCM.Error_Color, "已经运行了一个名为:[" + name + "]的ir脚本");
 			irContinue = false;
 		}
@@ -273,7 +298,9 @@ public class IRRunnable implements Runnable {
 	 * 会破坏第一条命令的解析,构造时统一去除。
 	 */
 	private static List<String> stripBom(List<String> allLines) {
+		// 步骤1:仅处理非空集合
 		if (allLines != null && allLines.size() > 0) {
+			// 步骤2:首行以BOM开头时剥去BOM(Windows记事本保存的UTF-8首行带BOM,会破坏第一条命令的解析)
 			String first = allLines.get(0);
 			if (first != null && first.startsWith(utfCode))
 				allLines.set(0, first.substring(utfCode.length()));
@@ -303,6 +330,7 @@ public class IRRunnable implements Runnable {
 	 * 其余行构成主序列;{@link #toMakeLabel_0} 递归处理嵌套标签。
 	 */
 	private static List<String> toMakeLabel(IRRunnable irRunnable, List<String> allLines) {
+		// 步骤1:新建主序列容器,从index=-1起递归预解析(标签行收入标签表,其余行构成主序列)
 		ArrayList<String> mainLabel = new ArrayList<String>();
 		toMakeLabel_0(irRunnable, allLines, -1, mainLabel, 0);
 		return mainLabel;
@@ -315,17 +343,21 @@ public class IRRunnable implements Runnable {
 	 */
 	private static void toMakeLabel_0(IRRunnable irRunnable, List<String> allLines, int index,
 			ArrayList<String> labelLine, int depth) {
-		// 修复:标签解析递归加深度上限,防止深嵌套"{"触发StackOverflowError
+		// 步骤1:标签解析递归深度上限,防止深嵌套"{"触发StackOverflowError
 		if (depth > MAX_LABEL_DEPTH) {
 			SairCons.println(FCM.Error_Color, "IR标签嵌套超过上限[" + MAX_LABEL_DEPTH + "]层,已截断解析");
 			return;
 		}
+		// 步骤2:从index+1起逐行扫描
 		for (int i = index + 1; i < allLines.size(); i++) {
 			String line = allLines.get(i);
+			// 步骤3:null/空行跳过
 			if (line == null || "".equals(line))
 				continue;
+			// 步骤4:去首尾空白并原地置空串(已消费的行避免重复执行)
 			line = line.trim();
 			allLines.set(i, "");
+			// 步骤5:行尾"{"开启命名标签块——取标签名并递归收集块内容
 			if (line.endsWith(label_head_flag)) {
 				String localName = "";
 				if (line.length() > 1)
@@ -334,13 +366,16 @@ public class IRRunnable implements Runnable {
 					localName = "noname";
 				ArrayList<String> labelList = new ArrayList<String>();
 				toMakeLabel_0(irRunnable, allLines, i, labelList, depth + 1);
+				// 步骤6:构造IRLabel并登记进标签表
 				IRLabel irl = new IRLabel();
 				irl.setName(localName);
 				irl.setLines(labelList);
 				irRunnable.irlabels.put(localName, irl);
 			} else if (line.endsWith(label_end_flag)) {
+				// 步骤7:行尾"}"结束当前标签块,返回上一级
 				return;
 			} else {
+				// 步骤8:普通行追加到当前收集列表
 				labelLine.add(line);
 			}
 		}

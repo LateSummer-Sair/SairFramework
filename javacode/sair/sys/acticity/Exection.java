@@ -70,8 +70,11 @@ public class Exection extends Acti {
 	 */
 	public Exection(String[] classNames, String path)
 			throws ClassNotFoundException, InstantiationException, IllegalAccessException, IOException {
+		// 步骤1:解析path/exists/url元数据(Acti构造器)
 		super(path);
+		// 步骤2:打开jar并登记专属类加载器
 		this.loadJar();
+		// 步骤3:保存主类名并立即实例化注册全部Activity(单步完成,与旧版行为一致)
 		this.classNames = classNames;
 		this.initExec();
 	}
@@ -102,9 +105,13 @@ public class Exection extends Acti {
 	 * 并按本 jar 的 URL 取得专属 SairLoader。
 	 */
 	private void loadJar() throws IOException {
+		// 步骤1:jar存在时经LoaderManager装载,并按本jar的URL取得专属SairLoader
 		if (this.exists == true) {
 			LoaderManager.loadExecJar(this.path);
 			loader = LoaderManager.ExecLoaders.get(this.getURL());
+			// 修复:登记异常/残留状态导致取不到loader时立即以IOException失败(而不是之后NPE)
+			if (loader == null)
+				throw new IOException("ExecLoader is null for: " + this.path);
 		}
 	}
 
@@ -115,19 +122,24 @@ public class Exection extends Acti {
 	 */
 	private void initExec() throws ClassNotFoundException, InstantiationException, IllegalAccessException {
 
+		// 步骤1:按类名逐个实例化并注册
 		if (classNames != null) {
 
 			for (String className : classNames) {
+				// 步骤2:经LoaderManager实例化Activity主类
 				Activity result = LoaderManager.loadMain(className, loader);
+				// 步骤3:分配唯一组件名(重复名抛异常时仅记录日志,不中断装载)
 				String name = Libraries.setActivityName(this.getPath());
 				try {
 					result.setName(name);
 				} catch (Exception e) {
 					SairCons.println(FCM.Error_Color, e.getMessage());
 				}
+				// 步骤4:写入Libraries两表(activities/exections)并登记actiList
 				Libraries.activities.put(name, result);
 				Libraries.exections.put(result, this);
 				actiList.add(result);
+				// 步骤5:输出装载日志
 				SairCons.println(FCM.loadExection_Color, "loaded EXECTIONS : " + this.getPath() + " --> " + className);
 			}
 
@@ -140,12 +152,15 @@ public class Exection extends Acti {
 	 * 由 {@link #serialInstantiate} 检查后跳过。
 	 */
 	public void parallelLoadClasses() {
+		// 步骤1:分配Class缓存并清空错误状态
 		loadedClasses = new Class<?>[classNames.length];
 		loadError = null;
 		try {
+			// 步骤2:仅loadClass(纯内存、无构造器副作用),可安全并行调用
 			for (int i = 0; i < classNames.length; i++)
 				loadedClasses[i] = loader.loadClass(classNames[i]);
 		} catch (Throwable e) {
+			// 步骤3:失败记录到loadError而非抛出,由serialInstantiate检查后跳过
 			loadError = e;
 		}
 	}
@@ -155,23 +170,29 @@ public class Exection extends Acti {
 	 * 构造器副作用顺序与旧版一致;{@link #loadError} 非空时直接跳过。
 	 */
 	public void serialInstantiate() {
+		// 步骤1:Phase B捕获过异常时直接跳过
 		if (loadError != null)
 			return;
 		try {
+			// 步骤2:主线程串行实例化+注册+日志,构造器副作用顺序与旧版一致
 			for (int i = 0; i < classNames.length; i++) {
+				// 步骤3:实例化主类
 				Activity result = LoaderManager.loadMain(classNames[i], loader);
+				// 步骤4:分配唯一组件名(重复名抛异常时仅记录日志,不中断装载)
 				String name = Libraries.setActivityName(this.getPath());
 				try {
 					result.setName(name);
 				} catch (Exception e) {
 					SairCons.println(FCM.Error_Color, e.getMessage());
 				}
+				// 步骤5:写入Libraries两表(activities/exections)并登记actiList
 				Libraries.activities.put(name, result);
 				Libraries.exections.put(result, this);
 				actiList.add(result);
 				SairCons.println(FCM.loadExection_Color, "loaded EXECTIONS : " + this.getPath() + " --> " + classNames[i]);
 			}
 		} catch (Throwable e) {
+			// 步骤6:任何异常记录到loadError,不向上抛出
 			loadError = e;
 		}
 	}
@@ -204,15 +225,20 @@ public class Exection extends Acti {
 	 * 对 actiList 中每个 Activity——在 synchronized(Libraries.activities)
 	 * 内按实例值移除全部注册名(含插件自行 put 的别名,旧实现只删主名导致别名残留),
 	 * 随后移除 exections 映射,并<b>自动调用一次 exit()(插件退出前置钩子)与 close()</b>;
-	 * 全部完成后 dispose 类加载器、清理 ExecLoaders/execJarPathSet(释放 jar 句柄)。
+	 * exit()/close() 抛出的任何异常只红字记录、不中断清理(插件代码无权破坏框架级释放);
+	 * 全部完成后 dispose 类加载器、清理 ExecLoaders/execJarPathSet(释放 jar 句柄),
+	 * 且该收尾<b>无论上面是否异常都必定执行</b>(避免半卸载导致jar句柄永久泄漏)。
 	 *
 	 * @throws Exception loader.dispose 或清理过程中的异常
 	 */
 	public void unLoadJar() throws Exception {
+		// 步骤1:打印卸载分隔线
 		SairCons.println(FCM.Error_Color, Pathes.printSplit);
+		// 步骤2:逐Activity清理注册与执行卸载前置钩子
 		for (Activity acti : actiList) {
 			String name = acti.getName();
-			// 修复:按实例值移除全部注册名(含插件自行put的别名),旧实现只删主名导致别名残留
+			// 步骤3:在synchronized(Libraries.activities)内按实例值移除全部注册名
+			// (含插件自行put的别名,旧实现只删主名导致别名残留)
 			synchronized (Libraries.activities) {
 				java.util.Iterator<String> it = Libraries.activities.keySet().iterator();
 				while (it.hasNext()) {
@@ -221,15 +247,23 @@ public class Exection extends Acti {
 						it.remove();
 				}
 			}
+			// 步骤4:移除exections映射并自动调用一次exit()(插件退出前置钩子)与close()
 			Exection exec = Libraries.exections.remove(acti);
 			if (acti != null) {
 				SairCons.println(FCM.Error_Color, "unload EXECTIONS-ACTI : " + name);
-				acti.exit();
-				acti.close();
+				// 修复:exit()是插件实现的方法,抛异常绝不允许中断框架清理——红字记录后继续
+				try {
+					acti.exit();
+					acti.close();
+				} catch (Throwable t) {
+					SairCons.println(FCM.Error_Color, "unload EXECTIONS-EXIT-FAIL : " + name + " -> " + t);
+				}
 			}
 			if (exec != null)
 				SairCons.println(FCM.Error_Color, "unload EXECTIONS-EXEC : " + name);
 		}
+		// 步骤5:收尾释放类加载器与LoaderManager缓存
+		// 修复:无论上面exit()/close()是否抛异常,该收尾都必须执行(否则半卸载残留+jar句柄泄漏)
 		this.unLoadJar0();
 	}
 
@@ -239,11 +273,12 @@ public class Exection extends Acti {
 	 * 导致 jar 文件被占用、无法删除/覆盖。
 	 */
 	private void unLoadJar0() throws Exception {
-		// 修复:加载失败路径loader可能为null,先判空避免NPE
+		// 步骤1:加载失败路径loader可能为null,先判空避免NPE
 		if (loader != null)
 			loader.dispose();
-		// 修复:插件卸载后清理ExecLoaders缓存,避免类加载器残留
+		// 步骤2:插件卸载后清理ExecLoaders缓存,避免类加载器残留导致jar文件被占用、无法删除/覆盖
 		LoaderManager.ExecLoaders.remove(this.getURL());
-		LoaderManager.execJarPathSet.remove(this.path);
+		// 修复:按规范化路径移除登记(与loadExecJar的登记键一致,任何路径写法都能清理干净)
+		LoaderManager.execJarPathSet.remove(LoaderManager.canonicalPath(this.path));
 	}
 }

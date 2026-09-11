@@ -19,7 +19,7 @@ import sair.sys.gui.swing.control.SFrame;
  * {@link #newBorderButton_Click} 按 BorderLayout 方位分发到 UP/DN/LE/RI 四个内部适配器。
  * </p>
  * <p>
- * <b>线程安全 / EDT 说明：</b>所有方法都是 Swing 鼠标回调，天然在 EDT 执行；
+ * <b>线程说明：</b>所有方法都是 AWT 鼠标事件回调，由系统在 EDT 派发，回调内同步直接执行；
  * 内部使用屏幕绝对坐标（{@code getXOnScreen/getYOnScreen}），
  * 多屏/高 DPI 环境下增量计算稳定。
  * </p>
@@ -67,18 +67,19 @@ class BorderButton_Clicks {
     private static MouseAdapter DN(final SFrame frame, final BorderButton borderButton) {
         return new MouseAdapter() {
 
-            // 下压
+            // 步骤1(按下):记录起点 fy(屏幕坐标)
             @Override
             public void mousePressed(MouseEvent e) {
                 borderButton.fy = e.getYOnScreen();
             }
 
+            // 步骤2(拖动):实时计算增量 ny = 当前屏幕 y - 按下起点
             @Override
             public void mouseDragged(MouseEvent e) {
                 borderButton.ny = e.getYOnScreen() - borderButton.fy;
             }
 
-            // 释放
+            // 步骤3(释放):高度 += ny 并做最小高度下限保护,写回窗体边界
             @Override
             public void mouseReleased(MouseEvent e) {
                 int local = frame.getHeight() + borderButton.ny;
@@ -108,19 +109,20 @@ class BorderButton_Clicks {
     private static MouseAdapter RI(final SFrame frame, final BorderButton borderButton) {
         return new MouseAdapter() {
 
-            // 下压
+            // 步骤1(按下):记录起点 fx(屏幕坐标)
             @Override
             public void mousePressed(MouseEvent e) {
                 borderButton.fx = e.getXOnScreen();
 
-            } // 释放
+            }
 
+            // 步骤2(拖动):实时计算增量 nx = 当前屏幕 x - 按下起点
             @Override
             public void mouseDragged(MouseEvent e) {
                 borderButton.nx = e.getXOnScreen() - borderButton.fx;
             }
 
-            // 释放
+            // 步骤3(释放):宽度 += nx 并做最小宽度下限保护,写回窗体边界
             @Override
             public void mouseReleased(MouseEvent e) {
                 int local = frame.getWidth() + borderButton.nx;
@@ -150,18 +152,19 @@ class BorderButton_Clicks {
     private static MouseAdapter LE(final SFrame frame, final BorderButton borderButton) {
         return new MouseAdapter() {
 
-            // 下压
+            // 步骤1(按下):记录起点 fx(屏幕坐标)
             @Override
             public void mousePressed(MouseEvent e) {
                 borderButton.fx = e.getXOnScreen();
             }
 
-            // 释放
+            // 步骤2(拖动):向左拖为正向增量 nx = 按下 fx - 当前屏幕 x
             @Override
             public void mouseDragged(MouseEvent e) {
                 borderButton.nx = borderButton.fx - e.getXOnScreen();
             }
 
+            // 步骤3(释放):x 取释放点屏幕坐标、宽度 += nx 联动(左边拖宽时窗体整体左移)
             @Override
             public void mouseReleased(MouseEvent e) {
                 int local = frame.getWidth() + borderButton.nx;
@@ -192,18 +195,19 @@ class BorderButton_Clicks {
     private static MouseAdapter UP(final SFrame frame, final BorderButton borderButton) {
         return new MouseAdapter() {
 
-            // 下压
+            // 步骤1(按下):记录起点 fy(屏幕坐标)
             @Override
             public void mousePressed(MouseEvent e) {
                 borderButton.fy = e.getYOnScreen();
             }
 
-            // 释放
+            // 步骤2(拖动):向上拖为正向增量 ny = 按下 fy - 当前屏幕 y
             @Override
             public void mouseDragged(MouseEvent e) {
                 borderButton.ny = borderButton.fy - e.getYOnScreen();
             }
 
+            // 步骤3(释放):y 取释放点屏幕坐标、高度 += ny 联动(上边拖高时窗体整体上移)
             @Override
             public void mouseReleased(MouseEvent e) {
                 int local = frame.getHeight() + borderButton.ny;

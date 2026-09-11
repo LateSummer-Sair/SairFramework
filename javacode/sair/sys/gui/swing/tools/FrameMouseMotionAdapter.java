@@ -8,7 +8,7 @@ import sair.sys.gui.swing.control.corpuscle.ClicksI;
 
 /**
  * <p>
- * SFrame 的鼠标拖动适配器（包私有）：拖动时按<b>原版绝对定位语义</b>移动窗体
+ * SFrame 的鼠标拖动适配器（包私有）：拖动时按<b>原版坐标语义</b>移动窗体
  * （新位置 = 当前屏幕坐标 − 按下时记录的组件相对坐标），
  * 并在拖动开始瞬间对处于设置面板展开状态的窗体施加一次性半透明（0.8f）悬浮效果。
  * </p>
@@ -18,11 +18,12 @@ import sair.sys.gui.swing.control.corpuscle.ClicksI;
  * 与 {@code FrameMouseAdapter} 成对工作（消费其按下时记录的 OldX/OldY）。
  * </p>
  * <p>
- * <b>线程安全 / EDT 说明：</b>鼠标移动事件回调天然在 EDT；{@link #c} 构造后仅设置一次。
+ * <b>线程说明：</b>AWT 鼠标移动事件回调由系统在 EDT 派发，回调内同步直接执行；
+ * {@link #c} 构造后仅设置一次。
  * </p>
  * <p>
  * <b>二进制兼容约束：</b>类与成员均为包私有，但被 {@code MouseCklicksFactory}、
- * {@link Clicks} 依赖；位置计算保持原版语义（勿改：屏幕坐标增量模型在 HiDPI
+ * {@link Clicks} 依赖；位置计算保持原版坐标语义（勿改：屏幕坐标增量模型在 HiDPI
  * 缩放下与窗口逻辑坐标不一致，会导致拖动位移量被放大、窗体无法拖到指定位置）。
  * </p>
  */
@@ -50,11 +51,12 @@ class FrameMouseMotionAdapter extends MouseMotionAdapter {
 	 * <li>若窗体为 {@link SFrame}、尚未进入设置悬浮态且设置面板展开，
 	 * 则收起中心内容（setcenterNULL）、置 0.8f 半透明（setFloat）并打上悬浮标记
 	 * （setSetingFloated(true)，一次性）；</li>
-	 * <li>按原版绝对定位语义移动窗体：新位置 = 当前屏幕坐标 − 按下时记录的组件相对坐标。</li>
+	 * <li>按原版坐标语义移动窗体：新位置 = 当前屏幕坐标 − 按下时记录的组件相对坐标。</li>
 	 * </ol>
 	 **/
 	@Override
 	public void mouseDragged(MouseEvent e) {
+		// 步骤1:设置面板展开时,一次性收起中心内容 + 置 0.8f 半透明 + 打悬浮标记(仅一次)
 		if ((c.getJFrame() instanceof SFrame) && !((SFrame) (c.getJFrame())).isSetingFloated()) {
 			SFrame sf = (SFrame) (c.getJFrame());
 			if (sf.isOpenSetting()) {
@@ -63,7 +65,7 @@ class FrameMouseMotionAdapter extends MouseMotionAdapter {
 				sf.setSetingFloated(true);
 			}
 		}
-		// 原版语义:新位置 = 屏幕坐标 - 按下时组件相对坐标(勿改,HiDPI下屏幕增量模型会放大位移)
+		// 步骤2(原版语义):新位置 = 当前屏幕坐标 - 按下时组件相对坐标(勿改,HiDPI下屏幕增量模型会放大位移)
 		int xOnScreen = e.getXOnScreen(), yOnScreen = e.getYOnScreen(), xx = xOnScreen - c.getOldX(),
 				yy = yOnScreen - c.getOldY();
 		c.getJFrame().setLocation(xx, yy);

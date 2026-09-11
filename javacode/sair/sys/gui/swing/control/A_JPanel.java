@@ -15,13 +15,13 @@ import sair.user.Activity;
  * <p>
  * 架构角色:ConsFrame.setImageBackground 最终把背景图写入本面板;SFrame.selectBgimg 的高斯模糊截屏也写这里。
  * <p>
- * 线程安全:setImg/paintComponent仅EDT调用;图片加载失败时清空旧图并重绘,不再静默保留旧背景。
+ * 线程安全:setImg由调用线程直接执行(ConsFrame.setImageBackground0/高斯模糊截屏/清图等写入);paintComponent为Swing渲染回调(系统在EDT派发);图片加载失败时清空旧图并重绘,不再静默保留旧背景。
  * <p>
  * 二进制兼容:公开构造器(A_JPanel()/A_JPanel(String))、getImg/setImg/setNewImageToJPanel两个重载签名保持稳定。
  */
 public class A_JPanel extends JPanel {
 	private static final long serialVersionUID = -2784605853404141634L;
-	/** 当前背景图(null=无背景);仅EDT读写 */
+	/** 当前背景图(null=无背景;调用线程写入、Swing渲染回调读取) */
 	private Image img;
 
 	/** 空构造:无背景图 */
@@ -38,7 +38,7 @@ public class A_JPanel extends JPanel {
 		return img;
 	}
 
-	/** 直接设置背景图(调用方负责repaint);仅EDT调用 */
+	/** 直接设置背景图(调用方负责repaint);由调用线程直接执行 */
 	public void setImg(Image img) {
 		this.img = img;
 	}
@@ -66,10 +66,12 @@ public class A_JPanel extends JPanel {
 		this.img = image;
 	}
 
-	/** 绘制:先画面板底色,再按面板宽高拉伸绘制背景图(仅EDT调用) */
+	/** 绘制:先画面板底色,再按面板宽高拉伸绘制背景图(Swing渲染回调,系统在EDT派发) */
 	@Override
 	public void paintComponent(Graphics g) {
+		// 第1步:父类绘制面板底色
 		super.paintComponent(g);
+		// 第2步:背景图按面板宽高拉伸绘制(底色之上、子组件之下)
 		if (this.img != null)
 			g.drawImage(img, 0, 0, getWidth(), getHeight(), this);
 	}

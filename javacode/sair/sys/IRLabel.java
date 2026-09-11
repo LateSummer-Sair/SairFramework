@@ -18,7 +18,7 @@ public class IRLabel {
 	private String name;
 
 	/**
-	 * 标签块内的命令行集合(已剔除空行)。
+	 * 标签块内的命令行集合(已剔除空行并去除首尾空白;解析阶段写入,运行阶段只读)。
 	 */
 	private List<String> lines;
 

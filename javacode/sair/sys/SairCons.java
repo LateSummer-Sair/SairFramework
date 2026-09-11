@@ -71,10 +71,13 @@ public class SairCons {
 	 * @return 登记成功返回 true;id/实现为 null 或 id 已存在返回 false
 	 */
 	public final static boolean addPrintRunnable(String pr_id, PrintRunnable pr) {
+		// 步骤1:空参数直接拒绝
 		if (pr_id == null || pr == null)
 			return false;
+		// 步骤2:putIfAbsent原子登记,重复id拒绝且不覆盖
 		if (printAgos.putIfAbsent(pr_id, pr) != null)
 			return false;
+		// 步骤3:同步控制台代理列表(直印模式:调用线程直接执行)
 		ConsFrame.cf.listModel.addElement(pr_id);
 		return true;
 	}
@@ -86,7 +89,9 @@ public class SairCons {
 	 * @return 被移除的代理;id 不存在时返回 null
 	 */
 	public final static PrintRunnable removePrintRunnable(String pr_id) {
+		// 步骤1:从注册表摘除代理
 		PrintRunnable old = printAgos.remove(pr_id);
+		// 步骤2:摘除成功则同步移除列表项(直印模式:调用线程直接执行)
 		if (old != null)
 			ConsFrame.cf.listModel.removeElement(pr_id);
 		return old;
@@ -96,7 +101,9 @@ public class SairCons {
 	 * 清空全部打印代理(原子 clear + 列表清空,直印模式)。
 	 */
 	public final static void removeAllPrintRunnable() {
+		// 步骤1:清空注册表(原子clear)
 		printAgos.clear();
+		// 步骤2:清空控制台代理列表(直印模式:调用线程直接执行)
 		ConsFrame.cf.listModel.removeAllElements();
 	}
 
@@ -115,7 +122,9 @@ public class SairCons {
 	}
 
 	/**
-	 * 删除控制台文本区间:offs 为起始偏移(0 表示从头),len 为长度(null 表示删到末尾)。
+	 * 删除控制台文本区间:offs/len 均可为 null——两者皆 null 删末尾一个字符;
+	 * offs 为 null 从 0 开始;len 为 null 或超出文档长度删到末尾。
+	 * (直印模式:调用线程直接执行,文档变更由 ConsFrame 内部 printLock 串行化)
 	 */
 	public final static void dePrint(Integer offs, Integer len) {
 		ConsFrame.dePrinto(offs, len);
@@ -123,12 +132,13 @@ public class SairCons {
 
 	/**
 	 * 控制台输出统一入口:向 index 处插入 info(颜色 c)。
-	 * <p>双路径策略(直印模式,无EDT调度):
-	 * <ul>
-	 * <li>存在打印代理时,代理在调用线程同步执行({@link #runAgo},保留原有实时语义),
-	 *     随后置标题并滚动;</li>
-	 * <li>无代理时走 ConsFrame.printo 直接插入(调用线程执行),滚动保持一致。</li>
-	 * </ul>
+	 * <p>双路径策略(直印模式,已彻底弃用EDT调度,无批处理):
+	 * <ol>
+	 * <li>存在打印代理时,同步遍历全部代理在<b>调用线程</b>执行({@link #runAgo},
+	 *     保留原有实时语义),随后设置窗口标题("SFW的其他输出模式")提示代理输出模式;</li>
+	 * <li>无代理时走 {@link ConsFrame#printo} 直接插入(调用线程直接执行,文档变更
+	 *     由 ConsFrame 内部 printLock 串行化,插入后光标跟随到文本末尾)。</li>
+	 * </ol>
 	 *
 	 * @param index 插入位置,可为 null(追加)
 	 * @param c     文本颜色,可为 null(默认色)
@@ -137,11 +147,12 @@ public class SairCons {
 	public final static void insertPrinto(final Integer index, final Color c, final String info) {
 		final boolean hasAgo = printAgos.size() != 0;
 		if (hasAgo) {
-			// 打印代理在调用线程同步执行(保留原有实时语义)
+			// 步骤1:打印代理在调用线程同步执行(保留原有实时语义)
 			runAgo(index, c, info);
+			// 步骤2:设置窗口标题,提示控制台当前处于代理输出模式
 			ConsFrame.setTitleInfo("SFW的其他输出模式");
 		} else {
-			// 打印走批处理(内部攒批后在EDT统一flush,性能优化),滚动合并保持不变
+			// 步骤1'(无代理):ConsFrame.printo 调用线程直接插入——文档变更经printLock串行化,插入后光标跟随到末尾
 			ConsFrame.printo(index, c, info);
 		}
 	}
@@ -169,11 +180,14 @@ public class SairCons {
 	 * try/finally 保证任何异常路径都恢复深度计数,避免误判后续输出。
 	 */
 	private static void runAgo(Integer index, Color c, String info) {
+		// 步骤1:读取本线程当前重入深度
 		Integer d = printAgoDepth.get();
+		// 步骤2:达到上限时打印告警并跳过本次输出(防无限递归)
 		if (d >= MAX_PRINT_AGO_DEPTH) {
 			System.err.println("[SairCons] 打印代理重入过深,已跳过本次输出");
 			return;
 		}
+		// 步骤3:深度+1后同步遍历全部代理分发本次输出
 		printAgoDepth.set(d + 1);
 		try {
 			for (String pr_id : printAgos.keySet()) {
@@ -182,6 +196,7 @@ public class SairCons {
 					pr.run(index, c, info);
 			}
 		} finally {
+			// 步骤4:finally恢复深度计数,任何异常路径都不误判后续输出
 			printAgoDepth.set(printAgoDepth.get() - 1);
 		}
 	}
@@ -218,7 +233,9 @@ public class SairCons {
 	 * 清空控制台:删除全部文本并清空命令历史(localRunnerHistory)。
 	 */
 	public final static void clear() {
+		// 步骤1:删除控制台全部文本(offs=0+len=null即删到末尾)
 		dePrint(0, null);
+		// 步骤2:清空命令历史
 		localRunnerHistory.clear();
 	}
 
@@ -283,15 +300,19 @@ public class SairCons {
 	 * @return 命令执行结果(可为 null)
 	 */
 	public final static Object runner(boolean isMark, String cmd) {
+		// 步骤1:读取本线程当前命令嵌套深度
 		Integer depth = runnerDepth.get();
+		// 步骤2:达到上限时打印错误并中止递归(防嵌入命令无限递归)
 		if (depth >= MAX_RUNNER_DEPTH) {
 			SairCons.println(FCM.Error_Color, "命令嵌套过深(超过MAX_RUNNER_DEPTH),已中止递归");
 			return null;
 		}
+		// 步骤3:深度+1后进入执行核心
 		runnerDepth.set(depth + 1);
 		try {
 			return runner0(isMark, cmd);
 		} finally {
+			// 步骤4:finally恢复深度计数,任何异常路径都不误判后续命令
 			runnerDepth.set(runnerDepth.get() - 1);
 		}
 	}
@@ -315,14 +336,15 @@ public class SairCons {
 		 * if ("jj/at 1+/100".equals(cmd)) System.out.println();
 		 */
 
+		// 步骤1:空命令/注释行直接返回
 		if (chkCmdIsNul(cmd))
 			return null;
-
+		// 步骤2:SPI卸载命令优先处理(命中即消费本条命令)
 		if (ToolPack.SpliterChkUninstall(cmd))
 			return true;
 
+		// 步骤3:isMark时同步完成历史裁剪(超10000条清空并重置游标)+追加,避免与上下键读取的check-then-act竞态
 		if (isMark) {
-			// 修复:裁剪+添加整体同步,避免与历史上下键读取的check-then-act竞态
 			synchronized (localRunnerHistory) {
 				if (SairCons.localRunnerHistory.size() > 10000) {
 					SairCons.localRunnerHistory.clear();
@@ -332,12 +354,13 @@ public class SairCons {
 			}
 		}
 
+		// 步骤4:解析命令;解析失败仅回退本次命令,绝不清空全局SPI管理器(并发下会静默摘除其他插件安装的解释器)
 		Spliter sp = ToolPack.findSplited(ltrim(cmd));
 		if (sp == null) {
-			// 修复:解析失败不再清空全局SPI管理器(并发下会静默摘除其他插件安装的解释器),仅回退本次命令
 			SairCons.println(FCM.Error_Color, "Spliter解析错误！本次命令已跳过");
 			return null;
 		}
+		// 步骤5:按组件名查找Activity——空名指向控制台默认FrameActivity,未注册则报not found
 		Activity localActivity = null;
 		String localName = sp.getExecName();
 		if (localName == null)
@@ -348,7 +371,7 @@ public class SairCons {
 			localActivity = Libraries.activities.get(localName);
 
 		if (localActivity != null) {
-			// SPI能力:为插件命令自动安装线程上下文类加载器,使ServiceLoader/DriverManager/
+			// 步骤6:为插件线程临时安装TCCL(execLoader),使ServiceLoader/DriverManager/
 			// AudioSystem等机制能发现plugins/lib中的META-INF/services实现(执行完毕自动恢复)
 			// 微优化:当前线程上下文已是目标加载器时跳过set/restore(IR循环连续调用同一插件时生效)
 			SairLoader execLoader = LoaderManager.getExecLoader(localActivity);
@@ -380,9 +403,12 @@ public class SairCons {
 	 * 返回 Boolean.FALSE 时打印帮助信息并回传 false(命令失败语义)。
 	 */
 	public static Object toActiRun(Activity localActivity, String funcName, String args) {
+		// 步骤1:调用组件main
 		Object result = localActivity.main(funcName, args);
+		// 步骤2:null视为已处理(成功)
 		if (result == null)
 			return null;
+		// 步骤3:Boolean.FALSE时打印帮助并回传false(命令失败语义)
 		if ((result instanceof Boolean) && (Boolean) result == false) {
 			printHelp(localActivity);
 			return false;
@@ -394,7 +420,9 @@ public class SairCons {
 	 * 打印组件帮助信息:分隔线 + help() 的每一行(包私有,供 OderFact 调用)。
 	 */
 	static void printHelp(Activity localActivity) {
+		// 步骤1:读取组件帮助行
 		String[] helpArgs = localActivity.help();
+		// 步骤2:分隔线 + 逐行帮助文本 + 分隔线
 		SairCons.println(FCM.split_Color, Pathes.printSplit);
 		for (String info : helpArgs)
 			SairCons.println(FCM.EXECTION_help_Color, info);

@@ -21,7 +21,7 @@
         <table class="doc-table">
             <thead><tr><th>成员</th><th>类型</th><th>说明</th></tr></thead>
             <tbody>
-                <tr><td><code>Version</code></td><td><code>static String</code></td><td>当前框架版本号（如 "0.5.3"）</td></tr>
+                <tr><td><code>Version</code></td><td><code>static String</code></td><td>当前框架版本号（如 "0.6.1"）</td></tr>
                 <tr><td><code>toTest(Activity, String, String)</code></td><td><code>static Object</code></td><td>调试用：加载框架并测试指定 Activity 的指定功能</td></tr>
             </tbody>
         </table>
@@ -36,7 +36,8 @@
             <tbody>
                 <tr><td><code>main(String funcName, String args)</code></td><td><strong>抽象方法</strong>，处理命令的主入口</td></tr>
                 <tr><td><code>help()</code></td><td><strong>抽象方法</strong>，返回帮助字符串数组</td></tr>
-                <tr><td><code>exit()</code></td><td><strong>抽象方法</strong>，插件卸载时调用</td></tr>
+                <tr><td><code>exit()</code></td><td><strong>抽象方法</strong>，插件卸载时由框架自动调用（插件在此释放自身资源）</td></tr>
+                <tr><td><code>uninstall()</code></td><td><code>public final</code>，框架专用的卸载入口（自动调用 <code>exit()</code> 并关闭插件，插件不应重写）</td></tr>
                 <tr><td><code>dataDir()</code></td><td>可重写，返回自定义数据目录名，默认返回 <code>null</code>（使用类全名）</td></tr>
                 <tr><td><code>o_funcMain(Object o)</code></td><td>可重写，处理 ofunc 命令的返回值，默认打印错误信息</td></tr>
                 <tr><td><code>getDataDir()</code></td><td>获取数据目录的完整路径，自动创建目录</td></tr>
@@ -100,17 +101,18 @@
     <!-- LoaderManager -->
     <h2 class="ani-fade-in-up ani-delay-1">LoaderManager 类 <span class="badge badge-accent2">sair.LoaderManager</span></h2>
     <div class="card ani-fade-in-up ani-delay-2">
-        <p>类加载管理器，负责加载 bootlib、modlib 和 exection 中的 JAR。</p>
+        <p>类加载管理器，负责加载 lib 和 exection 中的 JAR。</p>
         <table class="doc-table">
             <thead><tr><th>成员</th><th>说明</th></tr></thead>
             <tbody>
-                <tr><td><code>systemLoader</code></td><td>系统 ClassLoader</td></tr>
-                <tr><td><code>loader</code></td><td>全局 SairLoader 实例（用于 modlib）</td></tr>
+                <tr><td><code>systemLoader</code></td><td>系统 ClassLoader（框架自身资源查找用）</td></tr>
+                <tr><td><code>loader</code></td><td>全局 SairLoader 实例（用于 lib，支持 SPI）</td></tr>
                 <tr><td><code>ExecLoaders</code></td><td><code>HashMap&lt;URL, SairLoader&gt;</code> — 每个插件的独立 ClassLoader 映射</td></tr>
                 <tr><td><code>loadExecJar(String)</code></td><td>加载一个插件 JAR 到独立 ExectionLoader</td></tr>
                 <tr><td><code>loadLibJar(String)</code></td><td>加载一个库 JAR 到全局 SairLoader</td></tr>
                 <tr><td><code>loadMain(String className, ClassLoader)</code></td><td>从指定 ClassLoader 加载并实例化 Activity</td></tr>
-                <tr><td><code>getModResStream(String)</code></td><td>从 modlib 的 JAR 中读取资源文件流</td></tr>
+                <tr><td><code>getModResStream(String)</code></td><td>从 lib 的 JAR 中读取资源文件流</td></tr>
+                <tr><td><code>getExecLoader(Activity)</code></td><td>获取插件 Activity 的独立类加载器（线程上下文/SPI 用）</td></tr>
             </tbody>
         </table>
     </div>
@@ -144,8 +146,9 @@
         <table class="doc-table">
             <thead><tr><th>成员</th><th>说明</th></tr></thead>
             <tbody>
-                <tr><td><code>bootDir</code></td><td><code>plugins/bootlib/</code> 完整路径</td></tr>
-                <tr><td><code>modDir</code></td><td><code>plugins/modlib/</code> 完整路径</td></tr>
+                <tr><td><code>libDir</code></td><td><code>plugins/lib/</code> 完整路径（统一依赖库）</td></tr>
+                <tr><td><code>bootDir</code></td><td>兼容别名，同 <code>libDir</code>（已废弃）</td></tr>
+                <tr><td><code>modDir</code></td><td>兼容别名，同 <code>libDir</code>（已废弃）</td></tr>
                 <tr><td><code>execDir</code></td><td><code>plugins/exection/</code> 完整路径</td></tr>
                 <tr><td><code>dataResDir</code></td><td><code>data/</code> 完整路径</td></tr>
                 <tr><td><code>printSplit</code></td><td>分割线字符串 "----------..."</td></tr>
@@ -162,9 +165,9 @@
         <table class="doc-table">
             <thead><tr><th>成员</th><th>默认值</th><th>说明</th></tr></thead>
             <tbody>
-                <tr><td><code>loadBoot_Color</code></td><td><code>BLACK</code></td><td>bootlib 加载日志颜色</td></tr>
+                <tr><td><code>loadBoot_Color</code></td><td><code>BLACK</code></td><td>历史遗留字段（当前框架不再读取，保留仅为二进制兼容）</td></tr>
                 <tr><td><code>loadExection_Color</code></td><td><code>ORANGE</code></td><td>exection 加载日志颜色</td></tr>
-                <tr><td><code>loadMod_Color</code></td><td><code>WHITE</code></td><td>modlib 加载日志颜色</td></tr>
+                <tr><td><code>loadMod_Color</code></td><td><code>WHITE</code></td><td>lib（统一依赖库）加载日志颜色</td></tr>
                 <tr><td><code>EXECTION_pathInfo_Color</code></td><td><code>YELLOW</code></td><td>info 命令输出的路径信息颜色</td></tr>
                 <tr><td><code>EXECTION_help_Color</code></td><td><code>PINK</code></td><td>help 命令输出的帮助信息颜色</td></tr>
                 <tr><td><code>Error_Color</code></td><td><code>RED</code></td><td>错误信息颜色</td></tr>

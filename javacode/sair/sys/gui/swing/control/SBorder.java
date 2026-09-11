@@ -11,7 +11,7 @@ import javax.swing.border.AbstractBorder;
  * <p>
  * 架构角色:AbstractBorder子类(无内边距),ConsFrame.reinit_Color 中为 JTextField/JScrollPane/JList 安装。
  * <p>
- * 线程安全:仅EDT绘制;color为null时跳过绘制(防NPE);绘制使用paintBorder入参矩形(x,y,width,height),
+ * 线程安全:绘制为Swing渲染回调(系统在EDT派发);color为null时跳过绘制(防NPE);绘制使用paintBorder入参矩形(x,y,width,height),
  * 带inset的组件不再错位。
  * <p>
  * 二进制兼容:构造签名SBorder(Color)不变。
@@ -28,7 +28,7 @@ public class SBorder extends AbstractBorder {
 
     /**
      * 绘制圆角矩形边框:使用入参矩形(带inset的组件不再错位),color为null时直接跳过(防NPE)。
-     * 仅EDT调用。
+     * Swing渲染回调,系统在EDT派发。
      */
     @Override
     public void paintBorder(Component c, Graphics g, int x, int y, int width, int height) {

@@ -15,8 +15,9 @@ import sair.sys.gui.swing.control.corpuscle.ClicksI;
  * 把监听器创建与注入逻辑从门面类中分离。
  * </p>
  * <p>
- * <b>线程安全 / EDT 说明：</b>纯工厂，无共享可变状态，任意线程可调用；
- * 产出的监听器须在 EDT 挂到 Swing 组件。
+ * <b>线程说明：</b>纯工厂，无共享可变状态，任意线程可调用；
+ * 产出的监听器由 {@link Clicks#setClicks(ClicksI)} 挂到 Swing 组件，其回调由系统在 EDT 派发，
+ * 回调内同步直接执行。
  * </p>
  * <p>
  * <b>二进制兼容约束：</b>类与两个静态方法均为包私有，但 {@link Clicks} 依赖其签名，

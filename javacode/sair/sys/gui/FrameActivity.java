@@ -17,7 +17,7 @@ import sair.user.Activity;
  * (提示输入/help查看帮助,原实现静默返回)。
  * <p>
  * 线程模型(已彻底弃用EDT调度):main 可能被解释器在工作线程或AWT事件回调中调用,
- * 本类无共享可变状态(actions 每次分发现调),命令由调用线程直接执行(恢复旧版方式)。
+ * 本类无共享可变状态(actions 为命令实现助手的单实例,每次分发即时调用其方法),命令由调用线程直接执行(恢复旧版方式)。
  * /clear 只清空控制台文本,不影响画布选项卡隔离区(隔离区由右键菜单/clearComponents管理)。
  * <p>
  * 二进制兼容:公开字段 {@link #version} 与重写方法签名(main/help/exit/dataDir/o_funcMain)保持稳定;
@@ -27,11 +27,12 @@ public class FrameActivity extends Activity {
 
 	/** 版本显示串(help头部使用) */
 	public final String version = "version:" + Main.Version;
+	/** 命令实现助手(单实例):所有GUI命令的落地实现在FrameActivity_Actions */
 	private final FrameActivity_Actions actions = new FrameActivity_Actions();
 
 	/**
 	 * 命令分发入口:按 funcName 分发到 actions 的实现;所有分支返回非null结果。
-	 * 未知命令走default:先flushPoint(滚动贴底)再打印一行错误提示。
+	 * 未知命令走default:直接打印一行错误提示(经SairCons.println输出,随正常打印流程滚动贴底)。
 	 *
 	 * @param funcName 命令名(如"print"/"load")
 	 * @param args     命令参数原文

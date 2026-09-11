@@ -1,6 +1,7 @@
 package sair.sys.acticity;
 
 import java.io.File;
+import java.io.IOException;
 import java.net.MalformedURLException;
 import java.net.URL;
 
@@ -41,10 +42,21 @@ abstract class Acti {
      * @throws MalformedURLException 路径无法转换为 URL
      */
     protected Acti(String path) throws MalformedURLException {
+        // 步骤1:记录jar文件路径
         this.path = path;
+        // 步骤2:探测jar文件是否存在(不存在时跳过装载但实例仍可创建)
         File file = new File(this.path);
         this.exists = file.exists();
-        this.url = file.toURI().toURL();
+        // 步骤3:转换为URL(LoaderManager按URL缓存类加载器)
+        // 修复:URL统一用规范化文件——与LoaderManager.loadExecJar的URL登记键一致,
+        // 同一jar的任何路径写法(大小写/斜杠/相对路径)都能命中同一键,卸载不会漏清
+        File canon = file;
+        try {
+            canon = file.getCanonicalFile();
+        } catch (IOException e) {
+            // 规范化失败(罕见):回退原始路径(与旧版行为一致)
+        }
+        this.url = canon.toURI().toURL();
     }
 
     /**

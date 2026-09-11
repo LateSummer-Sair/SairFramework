@@ -34,14 +34,16 @@ public class ImageTool {
 	 * @throws IOException 比例非法或读写失败
 	 */
 	public static void toCompress(File input, File output, float ratio) throws IOException {
+		// 步骤1:目标格式取源文件扩展名,无扩展名时回退png
 		String fileName = input.getName();
-		// 修复:无扩展名时回退png;ratio限制(0,1]避免非正尺寸
 		String fileLastName = "png";
 		int dot = fileName.lastIndexOf(".");
 		if (dot > 0 && dot < fileName.length() - 1)
 			fileLastName = fileName.substring(dot + 1);
+		// 步骤2:ratio限制在(0,1],越界抛IOException(避免非正尺寸)
 		if (ratio <= 0f || ratio > 1f)
 			throw new IOException("ratio must be in (0,1]: " + ratio);
+		// 步骤3:try-with-resources保证输入/输出流任何路径都关闭
 		try (InputStream in = new FileInputStream(input); OutputStream out = new FileOutputStream(output)) {
 			toCompress(fileLastName, in, out, ratio);
 		}
@@ -59,20 +61,25 @@ public class ImageTool {
 	 */
 	public static void toCompress(String fileLastName, InputStream input, OutputStream output, float ratio)
 			throws IOException {
+		// 步骤1:解码源图
 		BufferedImage image = ImageIO.read(input);
-		// 修复:解码失败给出明确错误而非NPE
+		// 步骤2:解码失败给出明确错误而非NPE
 		if (image == null)
 			throw new IOException("无法解码图片(格式不支持或文件损坏)");
+		// 步骤3:按比例计算目标尺寸
 		int newWidth = (int) (image.getWidth() * ratio);
 		int newHeight = (int) (image.getHeight() * ratio);
+		// 步骤4:新建ARGB画布并设置四类高质量渲染提示
 		BufferedImage resizedImage = new BufferedImage(newWidth, newHeight, BufferedImage.TYPE_INT_ARGB);
 		Graphics2D g2d = resizedImage.createGraphics();
 		g2d.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
 		g2d.setRenderingHint(RenderingHints.KEY_FRACTIONALMETRICS, RenderingHints.VALUE_FRACTIONALMETRICS_ON);
 		g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
 		g2d.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+		// 步骤5:按目标尺寸缩放绘制并释放画笔
 		g2d.drawImage(image, 0, 0, newWidth, newHeight, null);
 		g2d.dispose();
+		// 步骤6:以fileLastName格式写出
 		ImageIO.write(resizedImage, fileLastName, output);
 
 	}
