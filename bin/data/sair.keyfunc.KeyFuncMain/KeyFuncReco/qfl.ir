@@ -1,0 +1,54 @@
+jj/setca 6
+jj/unstop
+/sleep 0
+
+jj/at 2/100
+/sleep 500
+
+jj/at 1/100
+/sleep 200
+
+jj/at 2/100
+/sleep 500
+
+jj/at 1/100
+/sleep 200
+
+jj/at 2/100
+/sleep 400
+
+jj/at 3/100
+/sleep 400
+
+jj/at 5/100
+/sleep 300
+
+jj/at 3/100
+/sleep 300
+
+jj/at 2/100
+/sleep 500
+
+jj/at 1/100
+/sleep 300
+
+jj/at 2/100
+/sleep 500
+
+jj/at 1/100
+/sleep 300
+
+jj/at 2/100
+/sleep 300
+
+jj/at 3/100
+/sleep 300
+
+jj/at 2/100
+/sleep 300
+
+jj/at 1/100
+/sleep 300
+
+jj/at 5-/100
+/sleep 300

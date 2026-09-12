@@ -1,0 +1,11 @@
+﻿
+// 因为Java无法手动回收垃圾，请用64位JDK运行，不然爆JVM内存停止响应
+
+/var-add kf keyfunc/set
+
+// 映射按钮
+%kf% 播放=/ir ".\data\sair.keyfunc.KeyFuncMain\KeyFuncReco\Rubia.ir"
+%kf% 停止=/ir-x ".\data\sair.keyfunc.KeyFuncMain\KeyFuncReco\Rubia.ir"
+%kf% 退出=/exit
+keyfunc/frame
+/hide

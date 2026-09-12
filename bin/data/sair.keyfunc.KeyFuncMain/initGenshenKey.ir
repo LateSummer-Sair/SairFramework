@@ -1,0 +1,70 @@
+﻿
+// 因为Java无法手动回收垃圾，请用64位JDK运行，不然爆JVM内存停止响应
+
+/var-add kf keyfunc/set
+
+// jj/atnt是不使用线程池播放
+/var-add jjcmd jj/at
+
+// jj/setca 是音源选择
+/var-add jjca jj/setca
+
+// 每个音符播放百分之55
+/var-add jjplt 100
+
+// Q~U
+%kf% Q=%jjcmd% 1+/%jjplt%
+%kf% W=%jjcmd% 2+/%jjplt%
+%kf% E=%jjcmd% 3+/%jjplt%
+%kf% R=%jjcmd% 4+/%jjplt%
+%kf% T=%jjcmd% 5+/%jjplt%
+%kf% Y=%jjcmd% 6+/%jjplt%
+%kf% U=%jjcmd% 7+/%jjplt%
+
+// A~J
+%kf% A=%jjcmd% 1/%jjplt%
+%kf% S=%jjcmd% 2/%jjplt%
+%kf% D=%jjcmd% 3/%jjplt%
+%kf% F=%jjcmd% 4/%jjplt%
+%kf% G=%jjcmd% 5/%jjplt%
+%kf% H=%jjcmd% 6/%jjplt%
+%kf% J=%jjcmd% 7/%jjplt%
+
+// Z~M
+%kf% Z=%jjcmd% 1-/%jjplt%
+%kf% X=%jjcmd% 2-/%jjplt%
+%kf% C=%jjcmd% 3-/%jjplt%
+%kf% V=%jjcmd% 4-/%jjplt%
+%kf% B=%jjcmd% 5-/%jjplt%
+%kf% N=%jjcmd% 6-/%jjplt%
+%kf% M=%jjcmd% 7-/%jjplt%
+
+// 音源切换快捷键
+%kf% 1=%jjca% 4
+%kf% 2=%jjca% 5
+%kf% 3=%jjca% 6
+%kf% 4=%jjca% 7
+
+// 设置[按键为启用录制
+%kf% [=keyfunc/reco
+
+// 设置]按键为关闭录制
+//(关闭录制如果是键盘监听器触发了变成脚本后要自己删除脚本最后一个keyfunc/stopreco)
+//(不然就会无限套娃生成ir文件)
+%kf% ]=keyfunc/stopreco
+
+// 设置`按键为结束整个SFW
+%kf% `=/exit
+
+// 打开keyfunc窗口
+keyfunc/frame
+
+// 加载系统钩子
+keyfunc/initgs
+
+// 预热jj组件,并默认设置第6音源
+jj/unstop
+%jjca% 6
+
+// 因为已经设置了退出按钮所以默认隐藏SFW窗体
+/hide
