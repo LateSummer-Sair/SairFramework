@@ -11,7 +11,6 @@ import java.awt.Graphics2D;
 import java.awt.Image;
 import java.awt.LinearGradientPaint;
 import java.awt.MenuItem;
-import java.awt.Point;
 import java.awt.PopupMenu;
 import java.awt.Rectangle;
 import java.awt.SystemTray;
@@ -30,7 +29,6 @@ import javax.swing.JPopupMenu;
 import javax.swing.JTabbedPane;
 import javax.swing.JTextPane;
 import javax.swing.SwingConstants;
-import javax.swing.plaf.TextUI;
 import javax.swing.text.BadLocationException;
 import javax.swing.text.DefaultCaret;
 import javax.swing.text.Document;
@@ -280,8 +278,8 @@ public class ConsFrame extends SFrame {
 	public static final void setFontColor(final Color c) {
 		cf.otC = c;
 		cf.reinit_Color();
-		if (cf.BGpath != null)
-			setImageBackground(cf.BGpath);
+		// 重刷配色会清空中心面板图片,统一补设背景图(存在BGpath时按解码缓存重设)
+		restoreImageBackground();
 	}
 
 	/**
@@ -333,8 +331,8 @@ public class ConsFrame extends SFrame {
 	public static final void setBackgroundColor(final Color c) {
 		cf.bgC = c;
 		cf.reinit_Color();
-		if (cf.BGpath != null)
-			setImageBackground(cf.BGpath);
+		// 重刷配色会清空中心面板图片,统一补设背景图
+		restoreImageBackground();
 	}
 
 	/**
@@ -389,6 +387,22 @@ public class ConsFrame extends SFrame {
 			cf.BGpath = null;
 			cf.reinit_Color();
 		}
+	}
+
+	/**
+	 * 恢复用户显式设置的背景图(存在 BGpath 时按解码缓存重设)。
+	 * <p>
+	 * 为什么必须集中成一个方法:{@link #reinit_Color()} 内部会经
+	 * {@code setOpenSetting(false)} 清空中心面板图片(纯色主题),因此<b>每一条</b>
+	 * 会重建配色的路径都必须在 reinit_Color() 之后补设一次背景图。历史缺陷正是
+	 * "字号随容器尺寸重刷"(reinitFont)这条后加的路径漏了补设,导致 resize/拖边框后
+	 * 用户背景图被静默清空(0.5.3 没有尺寸事件驱动的重刷,故不存在该问题)。
+	 * <p>
+	 * 命中解码缓存(键=路径|修改时间|大小)时仅 setImg+repaint,不重新解码,故调用开销极小。
+	 */
+	private static void restoreImageBackground() {
+		if (cf.BGpath != null)
+			setImageBackground(cf.BGpath);
 	}
 
 	/**
@@ -497,9 +511,18 @@ public class ConsFrame extends SFrame {
 			}
 		}
 		// 光标闪点(flashpoint)跟随到文本末尾:caret为SairCaret(DefaultCaret子类,ALWAYS_UPDATE策略,见initComp),
-		// setCaretPosition(文档末尾)令Swing按文本视图布局尺寸(preferredSize)算出底部并强制视口贴底,
-		// 每次输出后必定滚动定位到最新位置
-		cf.infoPane.setCaretPosition(cf.infoPane.getDocument().getLength());
+		// setCaretPosition(文档末尾)令Swing按文本视图布局尺寸(preferredSize)算出底部并强制视口贴底
+		// (贴底动作由JDK在EDT异步完成:DefaultCaret 内部 invokeLater 回调),每次输出后必定滚动定位到最新位置。
+		// 修复:窗口已关/销毁时跳过定位——关窗(EXIT_ON_CLOSE)时框架/插件仍在打印收尾日志,
+		// 此时定位会让JDK向EDT投递"视图已拆除"的重绘任务,在 FlowView 内抛 NPE(stderr刷屏);
+		// 并发 trim/dePrint/clear 还可能让位置在取值与定位之间越界,故一并窄兜底。
+		if (cf.infoPane.isDisplayable()) {
+			try {
+				cf.infoPane.setCaretPosition(cf.infoPane.getDocument().getLength());
+			} catch (RuntimeException e) {
+				// 位置在取值与定位之间被并发裁剪(IllegalArgumentException):跳过本次贴底
+			}
+		}
 
 		// int point = cf.infoPane.getHeight();
 		/* JViewport vp = */
@@ -865,8 +888,7 @@ public class ConsFrame extends SFrame {
 	public void setSize(int w, int h) {
 		this.re_init_styles(w, h);
 		super.setSize(w, h);
-		if (BGpath != null)
-			setImageBackground(BGpath);
+		restoreImageBackground();
 	}
 
 	/**
@@ -889,6 +911,10 @@ public class ConsFrame extends SFrame {
 		cf.p_f = f;
 		// 字号变化后按新字号重刷全部组件字体
 		cf.reinit_Color();
+		// 修复:字号随容器尺寸重刷这条路径也必须补设背景图——reinit_Color 会清空中心面板图片,
+		// 旧实现只在换前景色/换背景色/setBounds 后补设,于是 resize 与拖边框后用户背景图被静默清空
+		// (0.5.3 无尺寸事件驱动重刷,故不存在此问题);命中解码缓存时仅 setImg+repaint
+		restoreImageBackground();
 	}
 
 	/** 注册交互(构造期调用):Exit/Sair按钮、输入框回车执行与上下键历史、输入框拖动支持 */
@@ -1096,8 +1122,7 @@ public class ConsFrame extends SFrame {
 		super.setBounds(o_b);
 
 		this.re_init_styles(o_b.width, o_b.height);
-		if (BGpath != null)
-			setImageBackground(BGpath);
+		restoreImageBackground();
 	}
 
 	/** 辅助配色:ist=true返回背景色(选中文本色),false返回前景色(选区高亮色) */
@@ -1109,58 +1134,73 @@ public class ConsFrame extends SFrame {
 	}
 
 	/**
-	 * 控制台输出面板专用光标(DefaultCaret 子类,JDK8/17 双兼容的关窗竞态防护;必须public静态嵌套,
-	 * JDK17的DefaultCaret$1跨包invokevirtual分派时要求本类与本方法均可访问)。
+	 * 控制台输出面板专用光标(DefaultCaret 子类):窗口关闭/销毁后不再定位光标,
+	 * <b>从源头阻止 JDK 的异步重绘任务被调度</b>,消除关窗竞态 NPE(stderr 噪声)。
 	 * <p>
-	 * 背景:JDK9+ 起 DefaultCaret.setDot 把光标重绘调度为 EDT 异步任务
-	 * (invokeLater(new DefaultCaret$1) → 其 run() 以 invokevirtual 调用包私有的
-	 * repaintNewCaret());若此刻窗口已被 dispose,延迟重绘经 modelToView →
-	 * RootView.setSize → FlowView.layoutRow 触发 viewBuffer==null 的 NPE
-	 * (JDK17关窗竞态,stderr刷屏但不影响功能)。
+	 * 背景:DefaultCaret 每次定位都会向 EDT 投递一个重绘回调
+	 * (JDK8 DefaultCaret.java 与 JDK17 同构:changeCaretPosition 内
+	 * {@code SwingUtilities.invokeLater(callRepaintNewCaret)}),该回调以 invokevirtual 调用
+	 * <b>包私有</b>的 {@code repaintNewCaret()};回调里 modelToView → RootView.setSize →
+	 * FlowView.layoutRow 在视图已被拆除时抛 NPE(viewBuffer==null)。
+	 * 关窗触发窗口:本框架用 EXIT_ON_CLOSE,退出前框架与插件仍会打印收尾日志。
 	 * <p>
-	 * 实现:本类声明同名同签名的 public void repaintNewCaret()——JVM 虚分派命中本方法
-	 * (JDK8 上该方法为 protected,是标准合法覆写;JDK17 上为包私有,因本方法 public 跨包仍可访问)。
-	 * 方法内<b>不调用 super</b>(JDK17 上 super 方法是包私有,跨包 invokespecial 会 IllegalAccessError),
-	 * 改为全部使用 protected/public 成员按 JDK 原逻辑重实现,并加两处销毁防护:
-	 * <ul>
-	 * <li>入口:组件已不可显示(窗口 dispose/关闭)→ 直接跳过 modelToView;</li>
-	 * <li>兜底:入口检查后瞬间销毁的残余竞态 → 窄捕获 RuntimeException 静默跳过(该次重绘本就注定失败)。</li>
-	 * </ul>
-	 * 贴底语义与 DefaultCaret.ALWAYS_UPDATE 完全一致(initComp 中 setUpdatePolicy 设置)。
+	 * 为何覆写 setDot/moveDot 而<b>不是</b> repaintNewCaret(实测结论,勿再改回):
+	 * {@code repaintNewCaret()} 在 JDK8 与 JDK17 上<b>都是包私有</b>方法;按 JVMS 5.4.5,
+	 * 覆写包私有方法要求覆写方与被覆写方处于<b>同一运行期包</b>,故 sair.sys.gui 下的同名
+	 * public 方法<b>不构成覆写</b>,invokevirtual 仍会选中 DefaultCaret 自身实现
+	 * (已用最小样例在 JDK8/JDK17 双端实测:子类方法从未被调用)。写成 repaintNewCaret
+	 * 覆写只会得到永不执行的死代码。而 setDot(int)/moveDot(int) 是 public,跨包覆写合法
+	 * (下方用 @Override 让编译器把关),且位于调度点<b>之前</b>,才能真正阻止任务入队。
+	 * <p>
+	 * 贴底语义不变:组件可显示时原样委托 super(ALWAYS_UPDATE 策略见 initComp);
+	 * 组件已不可显示(窗口正在/已经销毁)时直接跳过——既不定位也不调度。
 	 */
 	public static class SairCaret extends DefaultCaret {
 
 		private static final long serialVersionUID = 1L;
 
 		/**
-		 * 重绘新光标位置(JDK17 由 EDT 异步调用,JDK8 由 setDot/moveDot 同步调用,均虚分派到本覆写):
-		 * 与 JDK 原逻辑一致——modelToView 定位 → adjustVisibility 贴底滚动 → magicCaret 记录 → damage 重绘,
-		 * 仅增加销毁防护(入口 isDisplayable 守卫 + 窄异常兜底)。
+		 * 组件是否已不可显示(组件为空,或所在窗口已 dispose/关闭)。
+		 * 注意:仅 setVisible(false)(/hide 到托盘)不算不可显示,此时贴底行为保持原样。
 		 */
-		public void repaintNewCaret() {
-			// 步骤1:组件空或已不可显示(窗口已关/销毁)→ 跳过,不再触发modelToView(消除关窗竞态NPE)
+		private boolean notDisplayable() {
 			JTextComponent c = getComponent();
-			if (c == null || !c.isDisplayable())
-				return;
-			TextUI mapper = c.getUI();
-			if (mapper == null || c.getDocument() == null)
+			return c == null || !c.isDisplayable();
+		}
+
+		/**
+		 * 定位光标(public 真覆写):printo0 的 setCaretPosition 最终调用本方法。
+		 * 不可显示时直接跳过——不更新位置、不触发 JDK 的异步重绘调度(关窗竞态 NPE 的根源);
+		 * 可显示时原样委托 super,仅对"检查后瞬间销毁"的残余竞态做窄兜底。
+		 *
+		 * @param dot 目标位置
+		 */
+		@Override
+		public void setDot(int dot) {
+			// 步骤1:窗口已关/销毁→跳过(不再向EDT投递modelToView重绘任务)
+			if (notDisplayable())
 				return;
 			try {
-				// 步骤2:定位光标位置(3参重载JDK8/17均存在;BadLocationException=位置越界,按null处理)
-				Rectangle r = mapper.modelToView(c, getDot(), getDotBias());
-				if (r != null) {
-					// 步骤3:ALWAYS_UPDATE贴底滚动(EDT上直接scrollRectToVisible,非EDT走SafeScroller)
-					adjustVisibility(r);
-					// 步骤4:记录magicCaret(上下键导航锚点,与JDK17原逻辑一致)
-					if (getMagicCaretPosition() == null)
-						setMagicCaretPosition(new Point(r.x, r.y));
-				}
-				// 步骤5:重绘光标区域(damage对null安全)
-				damage(r);
-			} catch (BadLocationException e) {
-				// 位置越界:与JDK原逻辑一致,静默跳过本次重绘
+				// 步骤2:可显示→委托DefaultCaret原逻辑(ALWAYS_UPDATE贴底)
+				super.setDot(dot);
 			} catch (RuntimeException e) {
-				// 销毁竞态兜底:视图在步骤1检查后被并发拆除时Swing内部抛NPE等,吞掉即等同跳过本次重绘
+				// 视图并发拆除竞态:跳过本次定位(该次重绘本就注定失败)
+			}
+		}
+
+		/**
+		 * 移动光标(选区扩展用;控制台为只读输出面板,通常不触发):防护策略与 {@link #setDot(int)} 一致。
+		 *
+		 * @param dot 目标位置
+		 */
+		@Override
+		public void moveDot(int dot) {
+			if (notDisplayable())
+				return;
+			try {
+				super.moveDot(dot);
+			} catch (RuntimeException e) {
+				// 同setDot:销毁竞态兜底
 			}
 		}
 	}
