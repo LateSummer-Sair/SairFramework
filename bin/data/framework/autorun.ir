@@ -36,11 +36,11 @@ Start  {
     
 
     // 隐藏窗体
-    /hide
+    //hide
 
     /TO:Style
     /TO:Other
 
     // 显示窗体
-    /show
+    //show
 }
