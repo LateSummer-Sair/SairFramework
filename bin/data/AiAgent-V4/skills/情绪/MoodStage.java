@@ -65,6 +65,16 @@ public class MoodStage implements OutboundStage {
             String hit = banned(c, m.text());
             if (hit == null) return false;
             EmotionMood.warn(h, "出站否决：命中禁词类目「" + hit + "」（场景 " + EmotionMood.scopeOf(gid, qq) + "）");
+            // ★ 让她自己也知道"这条没发出去"（主人 2026-09-19 定：否决要有可见回执）：
+            //   往本会话的 context 槽写一行，下一轮她读得到；她自己换了说法发出去时会被 transform 清掉。
+            try {
+                if (h != null) {
+                    h.inject().put(m.session(), "context", "emotion_veto",
+                            "【出站被拦】上一条回复被情绪规则拦下、没有发出去（命中「" + hit + "」，"
+                            + EmotionMood.scopeOf(gid, qq) + "）。想说的话换个说法再说，别原样重发。", "情绪");
+                }
+            } catch (Throwable ignored) {
+            }
             return true;
         } catch (Throwable t) {
             return false;                                   // 出站兜底绝不拖垮一条发送
@@ -78,6 +88,12 @@ public class MoodStage implements OutboundStage {
         try {
             if (m == null) return null;
             String text = m.text();
+            Host h0 = m.host();
+            // 这一轮真有话要出去 ⇒ 把"上一条被拦"那条提示清掉（她已经重新说过了）
+            try {
+                if (h0 != null) h0.inject().remove(m.session(), "context", "emotion_veto");
+            } catch (Throwable ignored) {
+            }
             if (!Str.has(text)) return null;
             Host h = m.host();
             EmotionCfg c = EmotionCfg.of(h);

@@ -108,6 +108,7 @@ SFW 控制台右侧隔离区的那一页上（`sair.v4.ui.TalkPanel`），结构
 快照落后告警间隔秒: 300
 面板标题: AI 对话
 被单@时的输入: （有人只 @ 了你一下，没有附带任何内容 —— 读上下文快照，按你自己的理解接一句）
+失败回话: 诶，我这边刚卡了一下，没接上话……缓一缓我再说，别急哈。
 偏好标题: 偏好/设定（必须遵守）
 偏好行: - {key}: {value}
 偏好截断: …（还有 {rest} 条未列）
@@ -117,14 +118,13 @@ SFW 控制台右侧隔离区的那一页上（`sair.v4.ui.TalkPanel`），结构
 记忆与知识: memory, note, pref, correct, experience, impression
 文件: file, batch
 查询: search, web, weather, vision
-定时与触发: cron, trigger, alarm
+定时与触发: alarm, trigger
 自省: tools, config, perm
 系统: store, store_write, store_admin, skill, skill_write, exec, prompt, prompt_write, agent, ctx, model, napcat, console
 
-# 内置工具的用法示例（技能自己的示例写在技能 md 的 airun.examples 里）。
-# 「示例 <工具名>: a, b, c」——注册期由 Registry.add 补进该工具的说明（描述 + 示例 + 返回口径）。
-示例 tools: op=list 看你现在能用的工具（名字 + 一句话 + 归属）；op=search query=改设置 按意图找（「发图」「查余额」「发给某人」都行）；op=show name=send 读完整说明书（参数表 + 归属 + ★以你现在的身份能不能用 + 是否只读）
-示例 config: op=list 看所有已知键在 config.json 里的值（含只靠默认值生效的键），文件值与生效值不同的会标「待生效」；op=get key=agentMaxRounds 看一个键；op=set key=agentMaxRounds value=30 只把值写进 config.json（未生效；只有主人）—— 要基板 ai/start 才加载运行，已在运行则 ai/restart
-示例 console: op=read 看控制台最近打了什么；op=read since_seq=<上次返回里的 seq_tail> 只拿新增；op=run cmd="jj/at 1+/100" 跑一条框架命令并回它打出来的新输出；op=size 看控制台规模；op=clear 清屏（捕获缓冲仍留着最近输出，read 照旧读得到）
-示例 perm: op=acl 列出全部例外授权（加 principal=123456 看某人的有效位）；op=grant principal=123456 cls=A scope=D:/share bits=RWX 给某人放开（scope 留空 = 整个类，bits 留空 = 显式拒绝）；op=revoke principal=123456 cls=A 收回；op=whoami 看自己的身份与五类位（A/B/C/E/T，改账本只有主人能做）；op=check cls=C scope=memory 查某个范围上的默认分配/有效位/命中的例外（只读；principal 留空 = 查自己；查别人只有主人）
+# 内置工具的用法示例（技能自己的示例写在技能 md 的 airun.examples 里；自己声明过示例的工具，这里的行会被它盖掉）。
+# 「示例 <工具名>: a, b, c」——注册期由 Registry.add 补进该工具的说明。
+示例 tools: op=search query=发图；op=show name=send
+示例 config: op=get key=agentMaxRounds；op=set key=agentMaxRounds value=30（只写文件，要 ai/start 或 ai/restart 才生效）
+示例 console: op=read；op=run cmd="jj/at 1+/100"；op=clear
 

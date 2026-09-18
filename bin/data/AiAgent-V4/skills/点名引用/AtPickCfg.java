@@ -12,18 +12,17 @@ import sair.v4.kit.Str;
 import sair.v4.skill.Host;
 
 /**
- * 「@提问者」的配置面：本插件目录下 {@code prompt.md} 的 {@code 键: 值} 表。
+ * 「点名引用」的配置面：本插件目录下 {@code prompt.md} 的 {@code 键: 值} 表。
  *
- * <p>这一段原来长在 {@code AtAskerStage.Cfg} 里（私有静态嵌套类）。现在插件要读同一份配置的地方
- * 有三个（出站 stage / {@code on_message} 记账钩子 / 生命周期钩子的钉住），所以把它<b>原样搬成顶层类</b>，
- * 三处共用一份缓存 —— 读法、失效口径、兜底默认值一个字都没改：</p>
- * <ul>
- *   <li>惰性缓存 + 按「文件 + mtime」失效：每条消息不读盘，改完保存下一条生效；</li>
- *   <li>读不到文件 / {@code Host} 为 null（探针直接注册的合成件就是 null）→ 空表，
- *       调用方逐项落到兜底默认值，绝不抛异常。</li>
- * </ul>
+ * <p>读法（与全工程同一口径）：惰性缓存 + 按「文件 + mtime」失效 —— 每条消息不读盘，
+ * 改完保存<b>下一条消息就生效</b>，不需要 reload、不需要重启。读不到文件 /
+ * {@code Host} 为 null（探针直接注册的合成件就是 null）⇒ 空表，调用方逐项落到兜底默认值，
+ * <b>绝不抛异常</b>。</p>
+ *
+ * <p>本插件读同一份配置的地方有四处（记账钩子 / 教学段 / 清单段 / 出站执行段），
+ * 所以配置面单独一个类，四处共用一份缓存。</p>
  */
-final class AtAskerCfg {
+final class AtPickCfg {
 
     static final Map<String, List<String>> EMPTY = Collections.emptyMap();
 
@@ -31,7 +30,7 @@ final class AtAskerCfg {
     private static long stamp = -1L;
     private static Map<String, List<String>> kv = new LinkedHashMap<String, List<String>>();
 
-    private AtAskerCfg() {}
+    private AtPickCfg() {}
 
     static synchronized Map<String, List<String>> of(Host h) {
         if (h == null) return EMPTY;
@@ -118,17 +117,5 @@ final class AtAskerCfg {
         } catch (Throwable t) {
             return def;
         }
-    }
-
-    /** 逗号/空白分隔的清单（例如「重要标记: at,quote」）。空值 = 空表。 */
-    static List<String> list(Map<String, List<String>> c, String key) {
-        List<String> out = new ArrayList<String>();
-        String v = one(c, key, null);
-        if (Str.blank(v)) return out;
-        for (String p : v.split("[,\\s]+")) {
-            String t = p.trim();
-            if (!t.isEmpty()) out.add(t);
-        }
-        return out;
     }
 }

@@ -105,6 +105,12 @@ public class SendSkill implements Skill {
         if (!h.napcatConnected()) return Api.NOT_CONNECTED;
 
         List<String> ats = atList(a.str("at"));
+        // 出站三道闸在这里补一遍（控制标记 / 工具调用标记 / 纯文字）：带 at 的那一支走原始 call，
+        // 绕过了基板 `Api.sendGroupMsg` 里的那道闸 —— 截图事故（2026-09-18）漏出去的正是
+        // "她自己写的 <at .../> 标记 + DSML 残片"当正文发了出去。
+        String leak = sair.v4.qq.ToolMarkup.rule(text);
+        if (leak != null) return msg(c, "正文带工具调用标记，没发", "blocked_markup rule={rule}", "{rule}", leak);
+        text = sair.v4.qq.ChatMarkers.clean(text);
         JsonObject r;
         if (ats.isEmpty()) {
             r = h.napcat().sendGroupMsg(gid, text);
