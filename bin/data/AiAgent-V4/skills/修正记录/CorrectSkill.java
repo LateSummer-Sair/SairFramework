@@ -31,11 +31,12 @@ import sair.v4.store.Store;
  * 技能自己的 {@code prompt.md}（{@code ## 配置} / {@code ## 内容模板} / {@code ## 文案}）里，
  * 运行期读取、改了即生效；Java 里只有结构性的 ASCII 兜底。</p>
  *
- * <p><b>归属口径（ACL 之后的新口径 —— 与权限位无关）</b>：{@code note} 表是<b>她的共享知识库</b>
+ * <p><b>归属口径（本轮新口径 —— 只管控技能 / op，资源位已取消）</b>：{@code note} 表是<b>她的共享知识库</b>
  * （行里没有"这是谁的"这一列，{@code source} 只标是哪支技能写的），所以 {@code add}（含命中重复时的
  * {@code update} 追加正文）对非主人（{@code ALLUSER}）<b>一律拒</b>；{@code MASTER} 与她自己的自主行为
- * （{@code SYSTEM}）照常。判的是调用者身份，不是 {@code h.needDb("note",'W')} ——
- * 后者是 C 类资源，C 类对非主人只有 {@code R} ⇒ 把非主人写一律拦下；归属硬判仍在。</p>
+ * （{@code SYSTEM}）照常。判的是调用者身份，不是技能管控表 ——
+ * 管控表（{@code skillctl.json}）只管"能不能用 {@code correct.add} / {@code correct.list} 这个 op"；
+ * "这是不是你能写的知识"仍由下面的归属硬判裁定。</p>
  */
 public class CorrectSkill implements Skill {
 
@@ -69,16 +70,27 @@ public class CorrectSkill implements Skill {
         }
     }
 
+    /**
+     * 声明本技能的两个 op（技能管控表按这些名字放行 / 封禁）：
+     * {@code correct.add}（记一条纠正）与 {@code correct.list}（查纠错记录）。
+     */
+    @Override
+    public void declareOps(sair.v4.auth.OpList ops) {
+        ops.add("correct", "add", "记一条纠正");
+        ops.add("correct", "list", "查纠错记录");
+    }
+
     // ================================================================ add
 
     /** 记一条纠正：先查重（同一「原话 + 纠正后」只留一条），再落 note 库。 */
     private static String add(Args a, Host h, Store s, Cfg c) {
+        // op 判定（动作分支开头）：记一条纠正 = correct.add
+        String deny = h.need("correct.add");
+        if (deny != null) return deny;
         // 归属硬判（唯一覆盖 put 与 update 两道写的地方）：note 是她的共享知识库、行里没有归属列
         // ⇒ 非主人（ALLUSER）一律拒。命中重复时走的 bump() → s.update(LIB, id, …) 同样被这一条挡住。
         String own = noteWriteGuard(h);
         if (own != null) return own;
-        String deny = check(h, 'W');
-        if (deny != null) return deny;
         String original = Str.trim(a.str("original"));
         if (original.isEmpty()) return a.missing("original");
         String corrected = Str.trim(a.str("corrected"));
@@ -153,7 +165,8 @@ public class CorrectSkill implements Skill {
 
     /** 查纠错条目：不给关键词就按时间倒序，给了就走六库检索（再在 Java 侧按 source 过滤）。 */
     private static String list(Args a, Host h, Store s, Cfg c) {
-        String deny = check(h, 'R');
+        // op 判定（动作分支开头）：查记录 = correct.list
+        String deny = h.need("correct.list");
         if (deny != null) return deny;
         int limit = a.i("limit", atLeast(P(c, "列表条数", "10"), 1, 200));
         if (limit <= 0) limit = atLeast(P(c, "列表条数", "10"), 1, 200);
@@ -401,20 +414,6 @@ public class CorrectSkill implements Skill {
     // ================================================================ 小工具
 
     /**
-     * 资源判定（ACL）：纠错记录全落在 {@code note} 库（C 类）—— 读判 {@code R}、写判 {@code W}。
-     * 放行返回 null，否则返回可直接回给模型的拒绝原文。
-     *
-     * <p><b>它不表达"这是不是别人的知识"</b>：{@code note} 是 C 类资源，C 类对非主人只有 {@code R}
-     * ⇒ 非主人写一律被位拦下。归属仍由 {@link #noteWriteGuard} 硬判。</p>
-     *
-     * @param bit {@code 'R'} 读 / {@code 'W'} 写
-     */
-    private static String check(Host h, char bit) {
-        if (h == null) return null;
-        return h.needDb(LIB, bit);
-    }
-
-    /**
      * note 表的<b>归属硬判</b>：{@code note} 是她的共享知识库（行里没有 per-user 归属列），
      * 所以非主人（{@code ALLUSER}）对它的<b>写/改/删一律拒</b>；{@code MASTER} 与 {@code SYSTEM}
      * （她自己的蒸馏/记录）照常放行。
@@ -428,7 +427,7 @@ public class CorrectSkill implements Skill {
     }
 
     /**
-     * 受限主体判定（ACL 之后的新口径）：受限的只有 {@code ALLUSER}（普通用户）。
+     * 受限主体判定（本轮新口径）：受限的只有 {@code ALLUSER}（普通用户）。
      * <p>{@code MASTER} / {@code SYSTEM} 照常放行；身份取不到时按受限处理（fail-closed）。</p>
      */
     private static boolean restricted(Host h) {

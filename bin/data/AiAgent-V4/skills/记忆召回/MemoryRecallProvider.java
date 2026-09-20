@@ -37,7 +37,7 @@ import sair.v4.store.Store;
  * （{@code BuildContext.subagent()} 为真时也一样 —— 因为压根没有写路径）。
  * 查询 {@code memory}（本会话口径 8 条）与 {@code grouplog}（跨群群聊 5 条）。</p>
  *
- * <h3>归属硬判（ACL 之后的新口径 —— 与权限位无关）</h3>
+ * <h3>归属硬判（技能管控表只管技能 —— 这里判的是数据归属）</h3>
  * <p>检索结果<b>不能整锅端进这一轮的上下文</b>：{@code Store.search} 没有作用域过滤，
  * 库里既有别人的 {@code user} 记忆、也有别群的 {@code group} 记忆与别群的群聊记录。
  * 所以这里在渲染前逐条按<b>这一轮要说话的那个会话</b>做显式归属比较（见 {@link #visible}）。</p>
@@ -204,15 +204,9 @@ public class MemoryRecallProvider implements ContextProvider {
             Store s = store(h);
             if (s == null) return "";                       // 拿不到库 → 这一段不出现（不是异常）
 
-            // 资源判定（ACL）：本 provider 只读、不写 —— 读 memory / grouplog 各判一次读位。
-            // 上下文 provider 一般跑在"这一轮的触发者"主体下（C 类对非主人只有 R ⇒ 读得到）；
-            // 注意这一层只表达"这一类资源能不能读"，**不表达"这是不是你的数据"** ——
-            // 归属过滤在 render() 里逐条做（见 visible）。
-            // 没有触发者时按 SYSTEM 判（与 {@code ExtRegistry.guarded} 同口径：扩展点没有触发者 = 她自己的
-            // 自主行为，不是"没人 = 放行"）。真被拒时这一段安静地不产出，不拖垮这一轮。
-            if (denied(h, LIB_MEM)) return "";
-            if (flag(c, "跨群开关", true) && denied(h, LIB_LOG)) return "";
-
+            // 本 provider 只读、不写，也没有工具：它跑在扩展点的判定主体下（没有触发者时 = SYSTEM），
+            // 技能管控表只管控技能（工具 / op），所以这里<b>没有</b>任何 op 判定 ——
+            // 能不能注入由"目标会话"与下面的逐条归属过滤回答（见 visible）。
             String q = b.text();
             String filter = one(c, "查询过滤正则", DEF_FILTER);
             int min = num(c, "最小查询字数", DEF_MINQ);
@@ -262,7 +256,7 @@ public class MemoryRecallProvider implements ContextProvider {
      * 都在里面。这里是"跨群 / 别人的条目"被剔除的唯一位置。</p>
      *
      * @param dedupe 跨群那一段按 V3 口径去重（V3 用 LinkedHashSet 收跨群命中行）
-     * @param aim    本轮的目标会话（{@link #aim}）：能不能注入由它裁，不看权限位
+     * @param aim    本轮的目标会话（{@link #aim}）：能不能注入由它裁
      */
     private static List<String> render(Store s, String lib, String q, int n, String tpl,
                                        int cut, String tail, SimpleDateFormat fmt,
@@ -401,9 +395,9 @@ public class MemoryRecallProvider implements ContextProvider {
     /**
      * <b>归属硬判</b>：这一条能不能进"这一轮这个会话"。
      *
-     * <p>判的是<b>代码里的显式归属比较</b>，不是权限位 —— {@code memory} / {@code grouplog} 都是 C 类资源，
-     * ACL 的 C 类对非主人只有 {@code R}，所以 {@link #denied}（只判 C 的 {@code R} 位）对新旧口径都拦不住
-     * 「别人的数据」。</p>
+     * <p>判的是<b>代码里的显式归属比较</b>，不是技能管控表 —— 技能管控表只管控技能（工具 / op），
+     * 而"别人的 {@code user} 记忆、别群的群聊记录该不该注入"是数据隔离问题，
+     * 只能在这里逐条比（{@code Store.search} 没有 filter，命中结果是整库的）。</p>
      *
      * <ul>
      *   <li>{@code MASTER}（触发者是主人）→ 全部条目，与"主人恒全权"一致；</li>
@@ -430,28 +424,6 @@ public class MemoryRecallProvider implements ContextProvider {
         if ("user".equals(scope)) return aim.qq > 0L && String.valueOf(aim.qq).equals(sid);
         if ("group".equals(scope)) return aim.group > 0L && String.valueOf(aim.group).equals(sid);
         return false;
-    }
-
-    /**
-     * 读这个库被拒了吗（ACL：读库 → {@code C} 的 {@code R} 位）。
-     *
-     * <p>主体取当轮绑定的调用者；<b>没有触发者时按 SYSTEM</b>（{@code Caller.systemActor()}）——
-     * 与 {@code ExtRegistry.guarded} 同口径：扩展点没有触发者 = 她自己的自主行为，不是"没人 = 放行"。
-     * 权限面没装配（{@code acl()==null}，例如假宿主）时不拦，避免把基板自己的装配流程弄成"什么都不产出"。</p>
-     *
-     * <p><b>它拦不住"别人的数据"</b>：C 类对非主人只有 {@code R}（读位恒给），这一条对谁都是放行；
-     * 归属由 {@link #visible} 逐条硬判。</p>
-     */
-    private static boolean denied(Host h, String lib) {
-        if (h == null) return false;
-        try {
-            sair.v4.auth.Auth a = h.acl();
-            if (a == null) return false;
-            Caller who = h.subject();
-            return a.allowRes(who != null ? who : Caller.systemActor(), sair.v4.auth.Res.db(lib), 'R') != null;
-        } catch (Throwable t) {
-            return false;
-        }
     }
 
     /** V3 的 {@code hasMeaningfulQuery}：去空白与标点后长度 ≥ 门槛。 */

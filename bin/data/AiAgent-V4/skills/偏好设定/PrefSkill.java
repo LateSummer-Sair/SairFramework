@@ -27,18 +27,17 @@ import sair.v4.store.Store;
  * <p>三个 op：{@code get}（不给 scope 就按 user → group → global 逐层找）、{@code set}（写入 / 覆盖）、
  * {@code list}（列某个作用域下的全部条目）。</p>
  *
- * <p>写谁的作用域（<b>ACL 之后的新口径：代码里的显式归属比较，不是权限位</b>）：<br>
+ * <p>写谁的作用域（<b>本轮新口径：代码里的显式归属比较，与技能管控表无关</b>）：<br>
  * ① {@code global} → 非主人（{@code ALLUSER}）<b>一律拒</b>；{@code MASTER}/{@code SYSTEM} 照常；<br>
  * ② {@code group} → 非主人只能写<b>自己当前所在的那个群</b>，别的群一律拒；<br>
  * ③ {@code user} → 非主人只能写<b>自己</b>的（{@code scope_id == 自己 QQ}），写别人的一律拒。</p>
  *
- * <p><b>为什么还要归属硬判</b>：{@code pref} 是 C 类资源，C 类对非主人只有
- * {@code R} ⇒ 这个判定把非主人写一律拦下；"越权到别人/全局"仍要归属硬判
- * （见 {@link #guardWrite}）。</p>
+ * <p><b>为什么还要归属硬判</b>：技能管控表只管"能不能用 {@code pref.get} / {@code pref.set} /
+ * {@code pref.list} 这三个 op"（表里没放行 = 未授权 = 不可用）；"越权到别人/全局"是<b>数据归属</b>，
+ * 仍要归属硬判（见 {@link #guardWrite}）。</p>
  *
  * <p><b>读也按同一口径</b>（{@link #guardRead}）：非主人只能读自己的 {@code user}、自己所在群的
- * {@code group}、以及 {@code global}；别人的 {@code user} 一律拒 —— 偏好是 personal 数据，
- * 原来只判 {@code C} 的 {@code R} 位，等于谁都能读别人的个人偏好。</p>
+ * {@code group}、以及 {@code global}；别人的 {@code user} 一律拒 —— 偏好是 personal 数据。</p>
  *
  * <p>零硬编码文案：全部文案、默认作用域、条数、长度上限、以及重要度的三个档值
  * （{@code 重要度-MASTER} / {@code 重要度-SYSTEM} / {@code 重要度-USER}）都在 {@code prompt.md}
@@ -129,11 +128,23 @@ public class PrefSkill implements Skill {
         }
     }
 
+    /**
+     * 声明本技能的三个 op（技能管控表按这些名字放行 / 封禁）：
+     * {@code pref.get}（读一个）、{@code pref.set}（写一个）、{@code pref.list}（列一个作用域）。
+     */
+    @Override
+    public void declareOps(sair.v4.auth.OpList ops) {
+        ops.add("pref", "get", "读一个偏好");
+        ops.add("pref", "set", "写一个偏好（存在即覆盖）");
+        ops.add("pref", "list", "列一个作用域的偏好");
+    }
+
     // ================================================================ get
 
     /** 取一个偏好：不给 scope 就按「本人 → 本群 → 全局」逐层找，命中哪层就说哪层。 */
     private static String get(Args a, Host h, Store s, Cfg c) {
-        String deny = check(h, 'R');
+        // op 判定（动作分支开头）：读一个偏好 = pref.get
+        String deny = h.need("pref.get");
         if (deny != null) return deny;
         String key = Str.trim(a.str("key"));
         if (key.isEmpty()) return a.missing("key");
@@ -172,7 +183,8 @@ public class PrefSkill implements Skill {
 
     /** 写一个偏好（存在就覆盖）：作用域越权由 {@link #guardWrite} 的归属硬判拦下。 */
     private static String set(Args a, Host h, Store s, Cfg c) {
-        String deny = check(h, 'W');
+        // op 判定（动作分支开头）：写一个偏好 = pref.set
+        String deny = h.need("pref.set");
         if (deny != null) return deny;
         String key = Str.trim(a.str("key"));
         if (key.isEmpty()) return a.missing("key");
@@ -235,7 +247,8 @@ public class PrefSkill implements Skill {
 
     /** 列某个作用域下的全部偏好（默认：本人的 user 作用域）。 */
     private static String list(Args a, Host h, Store s, Cfg c) {
-        String deny = check(h, 'R');
+        // op 判定（动作分支开头）：列偏好 = pref.list
+        String deny = h.need("pref.list");
         if (deny != null) return deny;
         int limit = a.i("limit", atLeast(P(c, "列表条数", "20"), 1, 500));
         if (limit <= 0) limit = atLeast(P(c, "列表条数", "20"), 1, 500);
@@ -293,15 +306,14 @@ public class PrefSkill implements Skill {
     }
 
     /**
-     * 读作用域：<b>归属硬判</b>（ACL 之后的新口径 —— 与权限位无关，与写口同口径）。
+     * 读作用域：<b>归属硬判</b>（本轮新口径 —— 与 op 判定无关，与写口同口径）。
      *
      * <p>受限的只有 {@code ALLUSER}（普通用户）；{@code MASTER} 与 {@code SYSTEM}
      * （她自己的自主行为）照常放行。规则：非主人只能读<b>自己的 {@code user}</b>、
      * <b>自己所在群的 {@code group}</b>、以及 {@code global}；别人的 {@code user} 一律拒
      * （偏好是 personal 数据）。</p>
      *
-     * <p>原来这里只判 {@code check(h,'R')}：{@code pref} 是 C 类资源、C 类对非主人只有 {@code R}
-     * ⇒ 读位仍然放行 ⇒ 非主人读得到别人的个人偏好。</p>
+     * <p>op 判定（{@code pref.get}）只回答"能不能用这个动作"；"读的是谁的作用域"由这一道归属硬判裁定。</p>
      */
     private static String guardRead(Host h, String scope, String id, Cfg c, Args a) {
         if (!restricted(h)) return null;
@@ -318,7 +330,7 @@ public class PrefSkill implements Skill {
     }
 
     /**
-     * 写作用域：<b>归属硬判</b>（ACL 之后的新口径 —— 与权限位无关）。
+     * 写作用域：<b>归属硬判</b>（本轮新口径 —— 与 op 判定无关）。
      *
      * <p>受限的只有 {@code ALLUSER}（普通用户）；{@code MASTER}（主人）与 {@code SYSTEM}
      * （她自己的自主行为）照常放行。规则：</p>
@@ -329,8 +341,7 @@ public class PrefSkill implements Skill {
      *   <li>认不出的作用域 → 拒。</li>
      * </ul>
      *
-     * <p>原来这三处都是 {@code return check(h,'W')}（= {@code pref} 库的写位）——
-     * 而 C 类对非主人只有 {@code R} ⇒ 非主人写一律被位拦下；写别人的 / 别群的 / global 的仍由归属硬判裁定。</p>
+     * <p>op 判定（{@code pref.set}）只回答"能不能用这个动作"；"写的是谁的作用域"仍由这一道归属硬判裁定。</p>
      */
     private static String guardWrite(Host h, String scope, String id, Cfg c, Args a) {
         if (!restricted(h)) return null;
@@ -511,7 +522,7 @@ public class PrefSkill implements Skill {
     }
 
     /**
-     * 受限主体判定（ACL 之后的新口径）：受限的只有 {@code ALLUSER}（普通用户）。
+     * 受限主体判定（本轮新口径）：受限的只有 {@code ALLUSER}（普通用户）。
      * <p>{@code MASTER} / {@code SYSTEM}（她自己的自主行为）照常放行；身份取不到时按受限处理（fail-closed）。</p>
      */
     private static boolean restricted(Host h) {
@@ -522,20 +533,6 @@ public class PrefSkill implements Skill {
         } catch (Throwable t) {
             return true;
         }
-    }
-
-    /**
-     * 资源判定（ACL）：碰 {@code pref} 库（C 类）—— 读判 {@code R}、写判 {@code W}。
-     *
-     * <p>旧的 op 档位（{@code pref.set.global} / {@code pref.get.user.other} …）不再是权限概念：
-     * 权限只看"能不能碰 pref 这个库的读位/写位"。<b>它不表达"越权到别人/全局"</b> ——
-     * C 类对非主人只有 {@code R} ⇒ 非主人写一律被位拦下；"写/读的是谁的作用域"仍由 {@link #guardWrite} / {@link #restricted} 里的归属硬判裁定。</p>
-     *
-     * @param bit {@code 'R'} 读 / {@code 'W'} 写
-     */
-    private static String check(Host h, char bit) {
-        if (h == null) return null;
-        return h.needDb(LIB, bit);
     }
 
     private static String time(Cfg c, long ts) {

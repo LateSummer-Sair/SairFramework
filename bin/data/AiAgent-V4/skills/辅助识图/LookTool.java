@@ -15,8 +15,9 @@ import sair.v4.skill.Skill;
  *       {@code seg} = 这条消息里第几个<b>图片段</b>（0 起，缺省 0），{@code ask} = 要它看图里的什么，
  *       {@code refresh} = 忽略账本重新识别一次。<b>不接受 URL / 路径 / NapCat 的 file 值</b> ——
  *       传 URL 一律拒（回执逐字：{@code [look] ok=0 只接受消息身份（id/seg），不接受 URL}）。</li>
- *   <li><b>权限</b>：这是一个"对外执行"的工具 ⇒ 判 T 类 {@code Res.tool("look")} 的 {@code X} 位
- *       （{@code ALLUSER} 的 T 类默认是 {@code NONE} ⇒ 非主人用不了；要放行只能由账本开口）。</li>
+ *   <li><b>权限</b>：这是一个"对外执行"的工具 ⇒ 判自己的 op {@code look}（技能管控表：空 = 未授权 = 不可用，
+ *       {@code Run["look",…]} 才可用）。判不过时把基板的拒绝原文原样回给模型；她自己（{@code SYSTEM}）
+ *       与主人恒全权，不受管控表影响。</li>
  *   <li><b>回执形状</b>：成功一律 {@link sair.v4.qq.MediaRender#machine}</b>（{@code [识图·<模型>] <描述>}，
  *       自己绝不拼方括号标签）；失败/拒答首行一律 {@code [look] ok=0 <如实原因>}
  *       （{@code agent\Loop.java} 的连续失败闸门靠这个结构标记计数）。</li>
@@ -29,6 +30,12 @@ public class LookTool implements Skill, Hooked {
 
     /** 唯一的 op。 */
     private static final String OP = "look";
+
+    /** 本技能唯一的 op（单动作工具：动作名传空串）。 */
+    @Override
+    public void declareOps(sair.v4.auth.OpList ops) {
+        ops.add(OP, "", "让会看图的模型看一条消息里的图");
+    }
 
     /**
      * 钩子入口：只接 {@code on_message}，其余钩子名一律忽略（本技能只声明了这一个）。
@@ -63,8 +70,9 @@ public class LookTool implements Skill, Hooked {
             String ask = Str.trim(a.str("ask"));
             boolean refresh = a.b("refresh", false);
 
-            // 出网取图 + 调模型 = 执行一个工具 ⇒ 判这把工具的 X 位（T 类；ALLUSER 默认无位）
-            String deny = h.need(sair.v4.auth.Res.tool(OP), 'X');
+            // 出网取图 + 调模型 = 执行这把工具 ⇒ 判自己的 op（单动作工具，op = look）。
+            // 空 = 未授权 = 不可用；放行返回 null，被拒时把拒绝原文原样回给模型。
+            String deny = h.need(OP);
             if (deny != null) return deny;
 
             return VisionAgent.get().lookOne(h, id, seg, ask, refresh, c);

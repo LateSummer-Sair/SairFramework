@@ -90,7 +90,7 @@ import sair.v4.store.Store;
  * （{@link #gateDeny}），不判"能不能看"、也不再要求 {@code resolveModel()} 非空 ——
  * 因为 relay 策略的语义就是"图不再原生挂进主模型请求、所有图都只能过看图手"；
  * 此时还按 {@code FB_FLASH} 拒，等于"提示词让她用图手、图手却拒她"=她永远看不了图。
- * 下面那条能力判据（{@code FB_FLASH}）只服务<b>原生档位</b>下的"别白花钱"。</p>
+ * 下面那条能力判据（{@code FB_FLASH}）只服务<b>原生模式</b>下的"别白花钱"。</p>
  *
  * <h3>表情包候选：唯一的生产者（甲方口径）</h3>
  * <p>甲方原话：<b>表情包收集是跟着看图手走的，是在看图时的一个顺带，而不是主动自动去监听每一个消息</b>。
@@ -140,6 +140,30 @@ public final class VisionAgent {
 
     /** 机器文本的来源词（{@link MediaRender#machine} 的第一个参数）。 */
     public static final String MACHINE_SOURCE = "识图";
+
+    // ---------------------------------------------------------------- 图片内容审查（禁图词表；只审"图片内容"这一层）
+    // 甲方令（逐字）：**涉政、黄赌毒只针对图片内容审查，消息内容放宽的**。
+    // ⇒ 这两类红线**不再拦聊天正文**（那是情绪 / 出站那条线的事），只在**模型对这张图的回执**上审：
+    //   命中任一类 ⇒ ① 描述**不交给她**（回执换成 {@link #FB_IMG_BLOCK} 那一句固定的）；
+    //   ② 给 `表情包` 的候选行**不写**。这两个输出是同一次 {@code run(Task)} 产出的
+    //   （见 {@code run} / {@code fromLedger} 的两个调用点），所以**同一个判据函数**盖住两条路。
+    // ★ 判据真源**只有配置里那两张表**（{@link #IMG_KEY_POLITICS} / {@link #IMG_KEY_VICE}，见 prompt.md）
+    //   —— 本类里**一个词都没有**（改词只改数据），也没有除这两个键以外的任何开关。
+
+    /** 图片审查的配置键之一（涉政类词表；**词表本体只在 prompt.md 里**）。 */
+    public static final String IMG_KEY_POLITICS = "禁图-涉政";
+    /** 图片审查的配置键之一（黄赌毒类词表；**词表本体只在 prompt.md 里**）。 */
+    public static final String IMG_KEY_VICE = "禁图-黄赌毒";
+    /** 拦截回执里的固定标签（回执形状 = {@code [识图·已拦截] …}）。 */
+    public static final String IMG_BLOCK_TAG = "已拦截";
+    /**
+     * 拦截回执的**结构性兜底**（与 prompt.md 的 {@code 图片拦截} 一行**逐字相同**）。
+     *
+     * <p>它是**固定常量**（不含模型产出的任何一个字节），所以自己写方括号标签是安全的 ——
+     * 这里刻意不走 {@link MediaRender#machine}：那条路是给"模型产出的正文"消毒/包装用的
+     * （防模型自己伪造 {@code [识图·…]} 标签），而这一行**全字面**，不存在伪造面。</p>
+     */
+    public static final String FB_IMG_BLOCK = "[识图·" + IMG_BLOCK_TAG + "] 这张图的内容按红线不转述。";
 
     /** 取回队列长度（超了**丢弃不排队**）。 */
     public static final int QUEUE_MAX = 32;
@@ -600,7 +624,7 @@ public final class VisionAgent {
      *   <li>{@code auto} / {@code yes} / 怪值 ⇒ <b>与改动前逐字相同</b>（能看 ⇒ {@link #FB_FLASH}；
      *       模型名空 ⇒ {@link #FB_NO_MODEL}）。</li>
      * </ol>
-     * <p><b>{@link #FB_FLASH} 只服务原生档位下的"别白花钱"</b>（能看图的模型自己就看得到，
+     * <p><b>{@link #FB_FLASH} 只服务原生模式下的"别白花钱"</b>（能看图的模型自己就看得到，
      * 再派识图组件是白花钱 + 多一层转述）；在 relay 策略下这条必须让路 —— 两件事不是一回事：
      * "我能不能看"（白名单真值）与"允不允许我把图挂上去"（策略）。</p>
      * <p>{@code conf} 读不到 ⇒ <b>仍然拒</b>（fail-closed，判不出来 = 拒）—— 这一条一个字不改。</p>
@@ -640,7 +664,13 @@ public final class VisionAgent {
         return null;
     }
 
-    /** 取图的平台动作判位（E 类 X）在<b>调用者线程</b>上算：不让 worker 线程去替谁判（那是换主体的洞）。 */
+    /**
+     * 取图的 NapCat 动作判定在<b>调用者线程</b>上算：不让 worker 线程去替谁判（那是换主体的洞）。
+     *
+     * <p>判定的是 NapCat 动作自己的 op（{@code napcat.<动作名>}）：管控表里没给这个身份授权
+     * （空 / Ban）就拒，拒绝原文由 {@code h.need} 给（带 {@code [权限阻断]} 前缀）；
+     * 她自己（{@code SYSTEM}）与主人恒全权。</p>
+     */
     private static String napcatDeny(Host h, Cfg c) {
         try {
             if (!h.napcatConnected()) return c.msg("没连上", FB_NOT_CONNECTED);
@@ -648,7 +678,7 @@ public final class VisionAgent {
             return c.msg("没连上", FB_NOT_CONNECTED);
         }
         try {
-            return h.needPlatform(ACT_GET_MSG);
+            return h.need("napcat." + ACT_GET_MSG);
         } catch (Throwable t) {
             return c.msg("瞬时失败", FB_TRANSIENT, "{error}", String.valueOf(t));
         }
@@ -806,6 +836,18 @@ public final class VisionAgent {
                 // 切完描述为空（模型只回了 trailer）：走 FB_EMPTY_RESULT 那条失败语义，**不写候选**。
                 markTransient(t.identity);
                 t.result = t.cfg.msg("空结果", FB_EMPTY_RESULT);
+                return;
+            }
+            // ★★ 图片内容审查（**唯一插入点**：回执成形之前、任何落盘之前）★★
+            // 下面这几行会一次性产出**两样东西**：① 交给她的一行 [识图·<模型>] <描述>（账本命中那条路
+            // 也照产）；② 给 `表情包` 的 sticker:cand/<md5> 候选行（writeCandidate）。两者是**同一次
+            // run(Task)** 的两个输出 ⇒ 在这一处判完，两条路一起被盖住（入站钩子只登记内存索引，
+            // 从不产描述、不写候选 ⇒ 它那条路本来就没有描述可漏）。
+            // 命中 ⇒ 描述**不交出去**、候选行**不写**、账本**不落**（拦截结果不落盘），回执换固定那一句；
+            // 读不到词表 ⇒ 放行 + 一行 warn（fail-open，见 imgGate）。
+            String blocked = imgGate(t.cfg, text, t.identity);
+            if (blocked != null) {
+                t.result = blocked;
                 return;
             }
             String used = Str.has(r.modelUsed) ? Str.trim(r.modelUsed) : t.model;
@@ -1069,16 +1111,22 @@ public final class VisionAgent {
     private String fromLedger(Cfg c, JsonObject rec, int seg) {
         String st = J.s(rec, "state", "");
         // 观测（非判定，只多一行打印）：命中账本 ⇒ **0 次网络、0 次模型调用**。放在 fromLedger 内部是为了
-        // "一处覆盖两条命中路"：① lookOne 入队前先查账本（:381）；② worker 的闸内双检（:574，同身份第二个任务）。
+        // "一处覆盖两条命中路"：① {@code lookOne(...)} 入队前先查账本；② {@code run(Task)} 开头的闸内双检（同身份第二个任务）。
         // ⚠ 同一个字段名 `src=` 承载两种含义，别误读成"URL 来自 ledger 这一级"：
         //   · 本行 `src=ledger` = "**未解析 URL、直接命中账本**"；
         //   · run() 里 "身份 … src=" 那行的 `src=` = "**URL 从哪一级解析来的**"。
-        // 这一格的**允许取值集合**（前三个由 resolveUrl 阶梯产出，见 :638；第四个是本行）：
+        // 这一格的**允许取值集合**（前三个由 {@code resolveUrl(...)} 阶梯产出，第四个是本行）：
         //   index（进程内身份索引）/ inbound（基板入站登记簿）/ get_msg（NapCat 取回）/ **ledger（命中账本）**。
         // 只做观测 —— 不动判定/阈值/回执文本/预算计数；fromLedger 的返回值一个字不改。
         dim("身份 " + J.s(rec, "id", "") + " src=ledger state=" + st
                 + " model=" + J.s(rec, "model", "") + " chars=" + J.l(rec, "chars", 0L));
         if (ST_OK.equals(st)) {
+            // ★ 图片内容审查（**同一个判据函数** {@link #imgGate}）：账本里那条描述也要过同一道闸 ——
+            //   否则本次改动**之前**就已经落进账本的旧描述（或改表之后才命中的词）会在缓存期内被
+            //   原样转述出去：审查点只挡"新回执"是挡不住它的。命中 ⇒ 同样只回那一句固定的，
+            //   描述**一个字都不出去**（账本条目本身不动：拦住的是"交付"，不是"存过"）。
+            String blocked = imgGate(c, J.s(rec, "text", ""), J.s(rec, "id", ""));
+            if (blocked != null) return blocked;
             String m = MediaRender.machine(MACHINE_SOURCE, J.s(rec, "model", ""), J.s(rec, "text", ""));
             return Str.blank(m) ? c.msg("空结果", FB_EMPTY_RESULT) : m;
         }
@@ -1089,6 +1137,90 @@ public final class VisionAgent {
         if (ST_FAIL.equals(st)) return c.msg("永久失败", FB_FAIL, "{error}", J.s(rec, "src", ""));
         if (ST_PENDING.equals(st)) return c.msg("预算用尽", FB_BUDGET, "{why}", "pending");
         return c.msg("异常", FB_ERROR, "{error}", "state=" + st);
+    }
+
+    // ================================================================ 图片内容审查（禁图词表；只审"图片内容"这一层）
+    // 甲方令（逐字）：**涉政、黄赌毒只针对图片内容审查，消息内容放宽的**。
+    // ⇒ 这两类红线**不再拦聊天正文**（那是情绪 / 出站那条线的事）：本类**没有任何出站/正文审查**，
+    //   审查面只有一处 —— **模型对这张图的回执**（见 imgGate 的两个调用点：run / fromLedger）。
+    // ★ 判据真源**只有 prompt.md 里那两张表**（IMG_KEY_POLITICS / IMG_KEY_VICE）：
+    //   本类里一个词都没有（改词只改数据），也没有除这两个配置键以外的任何开关。
+    // ★ **fail-open**：读不到词表（缺行 / 整份 prompt.md 读不到）⇒ 放行 + 一行 warn。
+    //   识图是功能，不能因为读不到词表就把所有图都禁了。
+
+    /** 一次图片审查的结论（纯数据；便于离线夹具逐字断言）。 */
+    static final class ImgVerdict {
+        /** 命中的类目名（= 那张表的配置键）；空串 = 放行。 */
+        String category = "";
+        /** 读不到词表的那几类（**fail-open 的类目**；调用方只按类目名记一行 warn，一个词都不带）。 */
+        String missing = "";
+    }
+
+    /**
+     * <b>图片内容审查</b>（纯函数：无 I/O、无副作用、不起模型、不联网、不落盘）。
+     *
+     * <p>判据 = {@code text} 里出现任一张 {@code 禁图-*} 表里的任一词形（<b>子串、大小写不敏感</b>）。
+     * 审的是<b>模型对这张图的整条回执</b>：描述正文 <b>+</b> trailer 那四行 ——
+     * trailer 里的「图中文字」也是<b>图片内容</b>（图上的字），所以一并审，不做只审正文的收窄。</p>
+     *
+     * <p>两张表都读不到（{@code c == null} / 缺行）⇒ 不拦，只把缺的那几类记进
+     * {@link ImgVerdict#missing}（fail-open 的证据面，由 {@link #imgGate} 记一行 warn）。</p>
+     *
+     * @param c    本技能的配置（两张表就在里面；{@code null} = 读不到 ⇒ 全放行）
+     * @param text 模型对这张图的回执原文
+     */
+    static ImgVerdict imgScreen(Cfg c, String text) {
+        ImgVerdict v = new ImgVerdict();
+        String politics = c == null ? "" : c.imgPolitics;
+        String vice = c == null ? "" : c.imgVice;
+        StringBuilder miss = new StringBuilder();
+        if (Str.blank(politics)) miss.append(IMG_KEY_POLITICS);
+        if (Str.blank(vice)) {
+            if (miss.length() > 0) miss.append(',');
+            miss.append(IMG_KEY_VICE);
+        }
+        v.missing = miss.toString();
+        if (Str.blank(text)) return v;                           // 没有可审的正文 ⇒ 放行（调用方另有空结果语义）
+        if (hitTable(text, politics)) v.category = IMG_KEY_POLITICS;
+        else if (hitTable(text, vice)) v.category = IMG_KEY_VICE;
+        return v;
+    }
+
+    /** 一句话里出现表里任一词形（子串；**大小写不敏感**）：表按逗号分隔（半角/全角都认）。 */
+    private static boolean hitTable(String text, String table) {
+        if (Str.blank(text) || Str.blank(table)) return false;
+        String low = Str.lower(text);
+        for (String w : table.split("[,，]")) {
+            String x = Str.lower(Str.trim(w));
+            if (x.isEmpty()) continue;
+            if (low.indexOf(x) >= 0) return true;
+        }
+        return false;
+    }
+
+    /**
+     * <b>审查 + 记日志的唯一一处接线</b>（{@code run(Task)} 与 {@code fromLedger} 两个调用点都调它）。
+     *
+     * <ul>
+     *   <li><b>读不到词表</b> ⇒ 一行 warn（只报类目名，fail-open：这几类不拦），返回 {@code null}（放行）；</li>
+     *   <li><b>命中</b> ⇒ 一行 warn（<b>只带类目名与图 id（= id#seg），不带描述正文</b>），
+     *       返回固定回执 {@link #FB_IMG_BLOCK}（prompt.md 的 {@code 图片拦截} 一行，缺项用同字面兜底）；</li>
+     *   <li>其余 ⇒ {@code null}（放行，不打任何日志）。</li>
+     * </ul>
+     *
+     * @return {@code null} = 放行；非 null = <b>该回给她的那一行</b>（拦截回执）
+     */
+    private String imgGate(Cfg c, String text, String identity) {
+        Cfg cc = c == null ? new Cfg() : c;
+        ImgVerdict v = imgScreen(cc, text);
+        if (Str.has(v.missing)) {
+            warn("图片审查词表读不到，这几类按放行（fail-open）：" + v.missing);
+        }
+        if (Str.has(v.category)) {
+            warn("图片拦截 类目=" + v.category + " id=" + identity);
+            return cc.msg("图片拦截", FB_IMG_BLOCK);
+        }
+        return null;
     }
 
     // ================================================================ 表情包候选（trailer 解析 + 写一行）
@@ -1561,6 +1693,13 @@ public final class VisionAgent {
         public int windowTurns = 8;
         public String model = "";
         public String ask = "";
+        /**
+         * 图片审查词表两枚（{@code 禁图-涉政} / {@code 禁图-黄赌毒}，逗号分隔的**原文**）。
+         * <p><b>一个词都不在 Java 里</b>：这里只是从 prompt.md 的「配置」一节读到的串；
+         * 缺行 / 整份读不到 ⇒ 空串 ⇒ {@link #imgScreen} 判"读不到词表" ⇒ 放行 + 一行 warn（fail-open）。</p>
+         */
+        public String imgPolitics = "";
+        public String imgVice = "";
         public Map<String, String> texts = new LinkedHashMap<String, String>();
 
         /** 读技能自己目录里的 {@code prompt.md}（读不到 ⇒ 全默认）。 */
@@ -1589,6 +1728,10 @@ public final class VisionAgent {
             c.indexTtlMs = ttlSec * 1000L;
             c.windowTurns = (int) atLeast(num(kv.get("对话窗口轮"), 8L), 0L, 64L);
             c.model = Str.trim(kv.get("视觉模型"));
+            // 图片审查词表（原文读进来；**不在 Java 里落任何一个词**）——
+            // 缺行 ⇒ 空串 ⇒ imgScreen 判"读不到词表" ⇒ 放行 + 一行 warn（fail-open）。
+            c.imgPolitics = Str.trim(kv.get(IMG_KEY_POLITICS));
+            c.imgVice = Str.trim(kv.get(IMG_KEY_VICE));
             return c;
         }
 

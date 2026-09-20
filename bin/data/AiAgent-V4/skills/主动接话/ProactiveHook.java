@@ -31,8 +31,6 @@ public class ProactiveHook implements Hooked {
     private static final String KV_DAY = "talk_day";
     private static final String KV_DAY_COUNT = "talk_day_count";
     private static final String KV_LAST = "talk_last";
-    /** 冷却与日配额都落在通用 kv 表（C 类运行时数据）—— 资源判定用的库名。 */
-    private static final String LIB_KV = "kv";
 
     @Override
     public void on(String hook, JsonObject payload, Host h) {
@@ -56,18 +54,9 @@ public class ProactiveHook implements Hooked {
             if (word == null) return;                                   // 没命中关键词 → 不接
 
             long now = System.currentTimeMillis();
-            // 资源判定（ACL）：自主钩子（on_message）主体是 SYSTEM（她自己的 C 是 RWX）—— 读冷却 + 写日配额
-            // 都是 kv，她自己的接话判断照常，不会被默认分配误伤。
-            String denyRead = h.needDb(LIB_KV, 'R');
-            if (denyRead != null) {
-                log(h, "读不了 kv：" + denyRead);
-                return;
-            }
-            String denyWrite = h.needDb(LIB_KV, 'W');
-            if (denyWrite != null) {
-                log(h, "写不了 kv：" + denyWrite);
-                return;
-            }
+            // 权限：本技能只有一个 on_message 钩子、不注册任何工具，没有工具名也就没有自己的 op 可判 ——
+            // 钩子跑在 SYSTEM 主体上（她自己的自主行为），技能管控表对 SYSTEM 恒全权（放行）。
+            // 下面这些全是业务判断（冷却 / 日配额），照旧。
             long last = num(h.store().kv(KV_LAST_TS, "0"), 0L);
             if (c.gapSec > 0 && now - last < c.gapSec * 1000L) {
                 log(h, "命中「" + word + "」但还在冷却（" + (c.gapSec - (now - last) / 1000L) + " 秒后再考虑）");

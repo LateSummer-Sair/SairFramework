@@ -33,14 +33,22 @@ public class WebSkill implements Skill {
     private static final int DEF_MAX = 4000;
     private static final int CAP_MAX = 20000;
 
+    /**
+     * 声明本技能唯一的 op：<b>单动作工具</b> ⇒ op 就是工具名 {@code web}（{@code action} 传空串）。
+     */
+    @Override
+    public void declareOps(sair.v4.auth.OpList ops) {
+        ops.add(TOOL, "", "抓网页正文（JSON 自动美化 / HTML 去标签，超长截断）");
+    }
+
     @Override
     public Object call(Args a, Host h) {
         Cfg c = Cfg.load(h);
         if (c.bad != null) return c.bad;
 
-        // 出网抓取 = 执行一把工具（工具的运行时形态是 T 类资源）→ 判这个工具的 X 位。
-        // ALLUSER 默认 T=无 ⇒ 非主人用不了这把工具，要特例放行；她自己（SYSTEM）与主人同样照常。
-        String deny = h == null ? null : h.need(sair.v4.auth.Res.tool("web"), 'X');
+        // op 判定：本工具是单动作工具 ⇒ op 就是工具名 `web`（技能管控表按它放行/封禁）。
+        // 没授权（账本里那行没给身份）= 不可用；她自己（SYSTEM）与主人不受表影响，恒全权。
+        String deny = h == null ? null : h.need("web");
         if (deny != null) return deny;
 
         String url = Str.trim(a.str("url"));

@@ -18,9 +18,9 @@ import sair.v4.store.Store;
  * </ul>
  *
  * <h3>写库走谁</h3>
- * <p>扩展点的判定主体是<b>当轮调用者</b>（普通群友几乎没有写位），所以这里用
- * {@code Host.selfDb(lib,'W')} <b>按 SYSTEM 判位</b>（{@code Host} 明说了"出站/生命周期里要让插件写自己的东西"用这一对）。
- * 拿不到位就少做点事，绝不抛异常。</p>
+ * <p>本插件不提供工具（没有 op 可判）：生命周期扩展点跑在 <b>SYSTEM</b> 主体上，
+ * 写自己的表恒放行（技能管控表管的是工具/op，不管她自己的自主行为）。
+ * 拿不到 store 就少做点事，绝不抛异常。</p>
  *
  * <h3>只管主回合</h3>
  * <p>子 Agent 与后台收尾回合不触发（基板保证）—— 对"她说了几句"这件事正好是对的：
@@ -82,20 +82,15 @@ public class MoodLifecycle implements LifecycleHook {
     }
 
     /**
-     * 自己那一份库（按 <b>SYSTEM</b> 判位）。
-     * <p>拿不到位返回 {@code null}（少做点事）；权限面没装配（{@code acl()==null}）时也返回 store。
-     * 顺带留痕：被拒时打一行，否则"情绪时好时坏"查不出来。</p>
+     * 自己那一份库。
+     *
+     * <p>本插件不提供工具（没有 op 可判）：生命周期钩子跑在 <b>SYSTEM</b> 主体上，
+     * 写自己的表恒放行（技能管控表管的是工具/op，不管她自己的自主行为）。
+     * 拿不到 store 就少做点事，绝不抛异常。</p>
      */
     private static Store selfStore(Host h) {
         try {
             if (h == null) return null;
-            if (h.acl() != null) {
-                String deny = h.selfDb(EmotionState.LIB, 'W');
-                if (deny != null) {
-                    EmotionMood.warn(h, "mood write denied（生命周期）：" + deny);
-                    return null;
-                }
-            }
             return h.store();
         } catch (Throwable t) {
             return null;

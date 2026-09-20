@@ -25,10 +25,9 @@ import sair.v4.skill.Hooked;
  *
  * <p><b>执法前先判定"机器人自己在这个群有没有执法权"</b>（{@code h.selfIsGroupAdmin(群号)}，
  * 见下面 {@code on} 里的分支）：机器人不是本群管理员（或 NapCat 未连接）只记录不执法。
- * 这里判的是<b>群内角色</b>（机器人是不是管理员），不是调用者的权限档位 —— 旧写法
- * {@code h.auth().allow("napcat.set_group_ban", "GROUP_MASTER", false, h.caller())} 这个方法在
- * 权限面换成 ACL 资源模型后已不存在，别再照它写。命中即置 {@code payload._handled = true}，
- * 基板不再自动回复这条消息。</p>
+ * 这里判的是<b>群内角色</b>（机器人是不是管理员），不是调用者的授权 —— 技能管控表管的是
+ * 这个技能自己的工具 op（{@code moderation.config}），钩子的 NapCat 执法动作不在它的判定面上。
+ * 命中即置 {@code payload._handled = true}，基板不再自动回复这条消息。</p>
  */
 public class ModerationHook implements Hooked {
 

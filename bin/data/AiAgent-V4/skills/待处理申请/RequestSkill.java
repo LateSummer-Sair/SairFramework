@@ -31,9 +31,12 @@ import sair.v4.skill.Skill;
  *       再向 NapCat 实时问一次群系统消息，把还没处理的邀请/加群请求并进清单。</li>
  * </ul>
  *
- * <p>权限：{@code approve}/{@code reject} 是**机器人自己账号**上的动作 —— 发动作前
- * {@code h.needPlatform("set_friend_add_request"/"set_group_add_request")}（ACL 的 E 类判定，
- * E 类默认分配非主人为空 ⇒ 非主人被拒）；{@code pending} 的实时系统消息查询（配置了才发）同样走 platform。
+ * <p>权限：每个动作各判自己那个 op（技能管控表 {@code skillctl.json}）——
+ * {@code request.pending} / {@code request.approve} / {@code request.reject}，判定放在动作分支开头
+ * （没放行 = 未授权 = 不可用；{@code MASTER} 与她本人 {@code SYSTEM} 恒全权）。
+ * {@code approve}/{@code reject} 是**机器人自己账号**上的动作，所以发动作前还要判那个 NapCat 动作自己的 op：
+ * {@code h.need("napcat.set_friend_add_request")} / {@code h.need("napcat.set_group_add_request")}；
+ * {@code pending} 的实时系统消息查询（配置了才发）同样按 {@code napcat.<动作名>} 判。
  * 动作成功后才把该条从 {@code pending:} 清单里移出。</p>
  */
 public class RequestSkill implements Skill {
@@ -44,8 +47,14 @@ public class RequestSkill implements Skill {
     private static final String KV_PREFIX = "pending:";
     /** 复用「申请审批」钩子写的键（与 RequestHook.java 完全一致，不另起一套）。 */
     private static final String[] HOOK_KEYS = {"approve_friend_last", "approve_group_last"};
-    /** 待处理清单落在通用 kv 表（C 类运行时数据）—— 资源判定用的库名。 */
-    private static final String LIB_KV = "kv";
+
+    @Override
+    public void declareOps(sair.v4.auth.OpList ops) {
+        // 每个动作各一条：技能管控表就是按这些名字放行 / 封禁的
+        ops.add("request", "pending", "列待处理的好友申请与群邀请");
+        ops.add("request", "approve", "同意一条申请");
+        ops.add("request", "reject", "拒绝一条申请");
+    }
 
     @Override
     public Object call(Args a, Host h) {
@@ -76,9 +85,9 @@ public class RequestSkill implements Skill {
 
     /** 列出待处理的好友申请与群邀请（kv 清单 + 申请审批钩子的记录 + 可选实时查询）。 */
     private String pending(Cfg c, Host h) {
-        // 资源判定（ACL）：待处理清单存在通用 kv 表（C 类）→ 判读位（C:R 是默认位）。
-        String deny = h.needDb(LIB_KV, 'R');
-        if (deny != null) return denied(c, deny);
+        // op 判定（动作分支开头）：列待处理清单 = request.pending
+        String deny = h.need("request.pending");
+        if (deny != null) return deny;
 
         int cap = c.num("待处理最多", 50);
         List<JsonObject> rows = new ArrayList<JsonObject>();
@@ -108,7 +117,8 @@ public class RequestSkill implements Skill {
         String liveAction = Str.trim(c.str("系统消息动作", ""));
         String liveErr = "";
         if (Str.has(liveAction)) {
-            String d = h.needPlatform(liveAction);
+            // 这个动作也走技能管控表：op 名 = napcat.<动作名>
+            String d = h.need("napcat." + liveAction);
             if (d != null) {
                 liveErr = d;
             } else {
@@ -159,8 +169,11 @@ public class RequestSkill implements Skill {
 
     // ---------------------------------------------------------------- approve / reject
 
-    /** 同意 / 拒绝一条申请：先复核这个平台动作的 E 位（非主人恒拒），成功后把它从清单里移出。 */
+    /** 同意 / 拒绝一条申请：先判这个动作自己的 op（同意与拒绝各一条），成功后把它从清单里移出。 */
     private String decide(Cfg c, Args a, Host h, boolean approve) {
+        // op 判定（动作分支开头）：同意与拒绝是两个动作、各判自己的 op（一个判定点拆成两个）
+        String deny = h.need(approve ? "request.approve" : "request.reject");
+        if (deny != null) return deny;
         String op = approve ? "approve" : "reject";
         String type = Str.trim(a.str("type")).toLowerCase();
         if (type.isEmpty()) return missing(c, "type");
@@ -189,8 +202,9 @@ public class RequestSkill implements Skill {
                     "type", type, "ops", OPS);
         }
 
-        String deny = h.needPlatform(action);
-        if (deny != null) return denied(c, deny);
+        // 发出去的 NapCat 动作自己那一层：op 名 = napcat.<动作名>
+        String napcatDeny = h.need("napcat." + action);
+        if (napcatDeny != null) return denied(c, napcatDeny);
 
         JsonObject resp = h.napcat().call(action, params);
         if (!Api.ok(resp)) return failed(c, op, resp);

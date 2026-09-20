@@ -31,9 +31,11 @@ import sair.v4.skill.Skill;
  *
  * <p>三条纪律：</p>
  * <ol>
- *   <li><b>每个 op 复核权限再动手</b>：发动作前 {@code h.needPlatform(动作)}（E 类判定，E 类默认分配非主人为空 ⇒ 非主人被拒）；
- *       读消息（{@code get_msg}/{@code get_forward_msg}）同样走 platform；不过就把拒绝原文原样返回。</li>
- *   <li><b>未连接不硬发</b>：参数与权限过了之后、真正发之前查连接，未连接一律返回 {@link Api#NOT_CONNECTED}。</li>
+ *   <li><b>每个 op 先判自己的 op 再动手</b>：每个动作分支开头判一次 {@code h.need("send.<动作>")}（看技能管控表：
+ *       {@code Run} 放行才动手、{@code Ban}/空 = 不可用）；不过就把拒绝原文原样返回。NapCat 没连接一律返回
+ *       {@link Api#NOT_CONNECTED}。
+ *       读消息（{@code get_msg}/{@code get_forward_msg}）与拉历史是这些动作内部的步骤，不再各判一个 op。</li>
+ *   <li><b>未连接不硬发</b>：参数校验与 op 判定过了之后、真正发之前查连接，未连接一律返回 {@link Api#NOT_CONNECTED}。</li>
  *   <li><b>取不回就说清楚</b>：{@code forward} 逐条 {@code get_msg}，失败的条目带上错误串明确列出；
  *       一条都取不回就整条不发。</li>
  * </ol>
@@ -45,11 +47,8 @@ public class SendSkill implements Skill {
 
     /** 技能名（= 文件夹名 = md 文件名）。 */
     private static final String NAME = "消息发送";
-    /** OneBot 动作名（权限一律走 {@code h.needPlatform}，技能不硬编码档位）。 */
+    /** OneBot 动作名（技能不硬编码授权：一律走 {@code h.need("send.<动作>")}）。 */
     private static final String ACT_GROUP = "send_group_msg";
-    private static final String ACT_PRIVATE = "send_private_msg";
-    private static final String ACT_UPLOAD_GROUP = "upload_group_file";
-    private static final String ACT_UPLOAD_PRIVATE = "upload_private_file";
     private static final String ACT_GET_MSG = "get_msg";
     private static final String ACT_FORWARD_MSG = "get_forward_msg";
     private static final String ACT_DELETE = "delete_msg";
@@ -67,6 +66,21 @@ public class SendSkill implements Skill {
     private static final int RECALL_NOTE_MAX = 10;
 
     // ================================================================ 入口
+
+    /**
+     * 声明本技能的八个 op（技能管控表就是按这些名字放行或封禁的）。
+     */
+    @Override
+    public void declareOps(sair.v4.auth.OpList ops) {
+        ops.add("send", "group", "群发一条（可 @ 人 / @全体）");
+        ops.add("send", "private", "私聊发一句");
+        ops.add("send", "file", "发文件到当前会话");
+        ops.add("send", "fileto", "发文件给指定的人");
+        ops.add("send", "record", "发语音");
+        ops.add("send", "forward", "把历史消息转述出来再发");
+        ops.add("send", "relay", "转告一句话给某人");
+        ops.add("send", "recall", "撤回她自己发的消息");
+    }
 
     @Override
     public Object call(Args a, Host h) {
@@ -93,6 +107,9 @@ public class SendSkill implements Skill {
 
     /** 群发（可 @ 若干人或 @全体）。 */
     private static String group(Args a, Host h, Cfg c) {
+        // 这个动作分支的 op 判定（技能管控表：op 放行才动手）
+        String deny = h.need("send.group");
+        if (deny != null) return deny;
         String text = a.str("text");
         if (Str.blank(text)) return msg(c, "缺正文", "missing_text");
         long gid = a.l("group", 0L);
@@ -100,8 +117,6 @@ public class SendSkill implements Skill {
         if (gid <= 0L && me != null && me.isGroup()) gid = me.groupId();
         if (gid <= 0L) return msg(c, "缺目标群", "missing_group");
 
-        String deny = check(h, ACT_GROUP);
-        if (deny != null) return deny;
         if (!h.napcatConnected()) return Api.NOT_CONNECTED;
 
         List<String> ats = atList(a.str("at"));
@@ -130,6 +145,9 @@ public class SendSkill implements Skill {
 
     /** 私聊发一句。 */
     private static String privateMsg(Args a, Host h, Cfg c) {
+        // 这个动作分支的 op 判定（技能管控表：op 放行才动手）
+        String deny = h.need("send.private");
+        if (deny != null) return deny;
         String text = a.str("text");
         if (Str.blank(text)) return msg(c, "缺正文", "missing_text");
         long qq = a.l("qq", 0L);
@@ -137,8 +155,6 @@ public class SendSkill implements Skill {
         if (qq <= 0L && me != null && !me.isConsole() && !me.isGroup()) qq = me.qq();
         if (qq <= 0L) return msg(c, "缺目标人", "missing_qq");
 
-        String deny = check(h, ACT_PRIVATE);
-        if (deny != null) return deny;
         if (!h.napcatConnected()) return Api.NOT_CONNECTED;
 
         JsonObject r = h.napcat().sendPrivateMsg(qq, text);
@@ -153,6 +169,9 @@ public class SendSkill implements Skill {
 
     /** 把文件发到**当前会话**（群 → 群文件，私聊 → 私聊文件）。 */
     private static String file(Args a, Host h, Cfg c) {
+        // 这个动作分支的 op 判定（技能管控表：op 放行才动手）—— 群文件与私聊文件是同一个 send.file
+        String deny = h.need("send.file");
+        if (deny != null) return deny;
         String file = Str.trim(a.str("file"));
         if (file.isEmpty()) return msg(c, "缺文件", "missing_file");
         String name = Str.trim(a.str("name"));
@@ -161,8 +180,6 @@ public class SendSkill implements Skill {
         long id = group ? me.groupId() : (me == null || me.isConsole() ? 0L : me.qq());
         if (id <= 0L) return msg(c, "缺会话", "no_session");
 
-        String deny = check(h, group ? ACT_UPLOAD_GROUP : ACT_UPLOAD_PRIVATE);
-        if (deny != null) return deny;
         if (!h.napcatConnected()) return Api.NOT_CONNECTED;
 
         JsonObject r = group ? h.napcat().sendGroupFile(id, file, name) : h.napcat().sendPrivateFile(id, file, name);
@@ -175,14 +192,15 @@ public class SendSkill implements Skill {
 
     /** 把文件发给**指定的人**（私聊文件）。 */
     private static String fileTo(Args a, Host h, Cfg c) {
+        // 这个动作分支的 op 判定（技能管控表：op 放行才动手）
+        String deny = h.need("send.fileto");
+        if (deny != null) return deny;
         String file = Str.trim(a.str("file"));
         if (file.isEmpty()) return msg(c, "缺文件", "missing_file");
         long qq = a.l("qq", 0L);
         if (qq <= 0L) return msg(c, "缺目标人", "missing_qq");
         String name = Str.trim(a.str("name"));
 
-        String deny = check(h, ACT_UPLOAD_PRIVATE);
-        if (deny != null) return deny;
         if (!h.napcatConnected()) return Api.NOT_CONNECTED;
 
         JsonObject r = h.napcat().sendPrivateFile(qq, file, name);
@@ -210,6 +228,9 @@ public class SendSkill implements Skill {
      * 读权限判定由 {@code Api.call} 那一层统一负责，所以这里走封装、不自己拼动作名。</p>
      */
     private static String record(Args a, Host h, Cfg c) {
+        // 这个动作分支的 op 判定（技能管控表：op 放行才动手）—— 发语音就是 send.record
+        String deny = h.need("send.record");
+        if (deny != null) return deny;
         String file = Str.trim(a.str("file"));
         if (file.isEmpty()) return msg(c, "缺文件", "missing_file");
         long[] to = recordTarget(a, h);
@@ -217,9 +238,6 @@ public class SendSkill implements Skill {
         long id = group ? to[0] : to[1];
         if (id <= 0L) return msg(c, "缺收件人", "missing_recipient");
 
-        String act = group ? ACT_GROUP : ACT_PRIVATE;
-        String deny = check(h, act);
-        if (deny != null) return deny;
         if (!h.napcatConnected()) return Api.NOT_CONNECTED;
 
         String risk = riskStop(h, c);
@@ -256,12 +274,11 @@ public class SendSkill implements Skill {
     /**
      * 语音风控预检（{@code can_send_record} —— 这个名字在 {@code Api.catalog()} 里，不是猜的）：
      * 只有平台<b>明确说"不能发"</b>时才提前收手（并把平台原始回执带上）；
-     * 查不动（动作不支持、没有 E 位、返回里没有 {@code yes}）一律返回 {@code null} 继续发 ——
+     * 查不动（动作不支持、返回里没有 {@code yes}）一律返回 {@code null} 继续发 ——
      * 真正的判定永远是发送动作本身的结果，预检只是让"发不出去"这件事有个准确原因。
      */
     private static String riskStop(Host h, Cfg c) {
         try {
-            if (check(h, "can_send_record") != null) return null;
             JsonObject r = h.napcat().call("can_send_record", new JsonObject());
             if (!Api.ok(r)) return null;
             JsonObject d = J.sub(r, "data");
@@ -278,6 +295,9 @@ public class SendSkill implements Skill {
 
     /** 历史消息 → 带出处的文本 → 发（落点：group/qq 参数优先，其次当前会话）。 */
     private static String forward(Args a, Host h, Cfg c) {
+        // 这个动作分支的 op 判定（技能管控表：op 放行才动手）—— 取历史消息与发出去都是这一个 op 内部的步骤
+        String deny = h.need("send.forward");
+        if (deny != null) return deny;
         List<String> ids = ids(a);
         if (ids.isEmpty()) return msg(c, "缺消息ID", "missing_ids");
         long gid = a.l("group", 0L);
@@ -291,12 +311,6 @@ public class SendSkill implements Skill {
         boolean toGroup = gid > 0L;
         long target = toGroup ? gid : qq;
 
-        String deny = check(h, ACT_GET_MSG);
-        if (deny != null) return deny;
-        deny = check(h, ACT_FORWARD_MSG);      // get_forward_msg：旧代码文件内没查，这里补上
-        if (deny != null) return deny;
-        deny = check(h, toGroup ? ACT_GROUP : ACT_PRIVATE);
-        if (deny != null) return deny;
         if (!h.napcatConnected()) return Api.NOT_CONNECTED;
 
         int max = c.max;
@@ -406,6 +420,9 @@ public class SendSkill implements Skill {
 
     /** 把一句话转告给某人（私聊）。 */
     private static String relay(Args a, Host h, Cfg c) {
+        // 这个动作分支的 op 判定（技能管控表：op 放行才动手）
+        String deny = h.need("send.relay");
+        if (deny != null) return deny;
         long qq = a.l("qq", 0L);
         if (qq <= 0L) return msg(c, "缺目标人", "missing_qq");
         String text = a.str("text");
@@ -415,8 +432,6 @@ public class SendSkill implements Skill {
                 ? msg(c, "转告正文", "relay_body from={from} text={text}", "{from}", from, "{text}", text)
                 : msg(c, "转告正文无出处", "relay_body text={text}", "{text}", text);
 
-        String deny = check(h, ACT_PRIVATE);
-        if (deny != null) return deny;
         if (!h.napcatConnected()) return Api.NOT_CONNECTED;
 
         JsonObject r = h.napcat().sendPrivateMsg(qq, body);
@@ -444,15 +459,19 @@ public class SendSkill implements Skill {
      *
      * <p><b>只撤她自己发的</b>：发送者 QQ 必须等于 {@code h.conf().selfId()}；别人的消息一律跳过并写明原因
      * （哪怕她是管理员、哪怕主人点名要撤别人的 —— 这条路不做，遇到就回"只能撤我自己发的"）。
-     * 显式 id 也先 {@code get_msg} 核实一次发送者；核实不了（没权限 / 取不回 / 认不出发送者）就带着"未核实"
+     * 显式 id 也先 {@code get_msg} 核实一次发送者；核实不了（取不回 / 认不出发送者）就带着"未核实"
      * 如实标注后照撤，绝不假装核实过。</p>
      *
      * <p><b>限额与节流</b>：单次最多撤 {@code prompt.md} 的 {@code 撤回最多条数}（默认 20）条，
      * 超出的不报错、只在回执里说"还有 N 条没撤"；条与条之间睡 {@code 撤回间隔毫秒}（默认 300ms）。
-     * 每一条都单独过一遍 {@code h.needPlatform("delete_msg")}（E 类 X 位），逐条结果（成功/失败/跳过）
+     * 判定只在分支开头做一次（{@code send.recall}）—— 逐条结果（成功/失败/跳过）
      * 与平台原始 {@code retcode}/{@code status}/{@code message} 一并回执。</p>
      */
     private static String recall(Args a, Host h, Cfg c) {
+        // 这个动作分支的 op 判定（技能管控表：op 放行才动手）—— 拉历史、核实发送者、逐条 delete_msg
+        // 都是这一个 op 内部的步骤，不再各判一个 op。
+        String deny = h.need("send.recall");
+        if (deny != null) return deny;
         List<String> ids = recallIds(a);
         boolean byIds = !ids.isEmpty();
 
@@ -475,8 +494,6 @@ public class SendSkill implements Skill {
         if (!byIds && target <= 0L) return msg(c, "撤回缺会话", "recall_no_session");
         if (!byIds && !hasLast && !hasWindow) return msg(c, "撤回缺范围", "recall_no_range");
 
-        String deny = check(h, ACT_DELETE);
-        if (deny != null) return deny;
         if (!h.napcatConnected()) return Api.NOT_CONNECTED;
 
         long self = h.conf() == null ? 0L : h.conf().selfId();
@@ -492,8 +509,6 @@ public class SendSkill implements Skill {
         } else {
             if (self <= 0L) return msg(c, "撤回认不出自己", "recall_no_self");
             String hist = group ? ACT_HIST_GROUP : ACT_HIST_PRIVATE;
-            deny = check(h, hist);
-            if (deny != null) return deny;
             int limit = recallLimit(a);
             int count = recallHistCount(c, limit);
             JsonObject params = group
@@ -559,13 +574,6 @@ public class SendSkill implements Skill {
         int rest = candidates.size() - selected.size();
 
         boolean canVerify = byIds && self > 0L;
-        if (canVerify) {
-            String verifyDeny = check(h, ACT_GET_MSG);     // 核实发送者是辅助动作：没权限就不核实，但不假装核实过
-            if (verifyDeny != null) {
-                canVerify = false;
-                notes.add(msg(c, "撤回无法核实", "recall_unverified_all error={error}", "{error}", verifyDeny));
-            }
-        }
         if (byIds && self <= 0L) {
             notes.add(msg(c, "撤回无法核实", "recall_unverified_all error={error}",
                     "{error}", msg(c, "撤回读不到自己", "recall_self_unknown")));
@@ -576,11 +584,6 @@ public class SendSkill implements Skill {
         int recalled = 0;
         for (int i = 0; i < selected.size(); i++) {
             String id = selected.get(i);
-            String itemDeny = check(h, ACT_DELETE);        // 每一条都单独过一遍 E 类 X 位判定
-            if (itemDeny != null) {
-                failed.add(failLine(c, id, itemDeny));
-                continue;
-            }
             if (canVerify) {
                 JsonObject g = h.napcat().call(ACT_GET_MSG, J.obj("message_id", numOrStr(id)));
                 long from = 0L;
@@ -974,11 +977,6 @@ public class SendSkill implements Skill {
     }
 
     // ================================================================ 小工具
-
-    /** 权限复核：平台动作一律走 ACL 的 E 类判定（E 类默认分配非主人为空 ⇒ 非主人被拒）。 */
-    private static String check(Host h, String action) {
-        return h.needPlatform(action);
-    }
 
     /** 要转述的消息 id：数组、逗号分隔字符串、单个 id 三种都给面子。 */
     private static List<String> ids(Args a) {

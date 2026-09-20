@@ -76,10 +76,12 @@
 # 指纹最短项数：内容至少要有这么多 2-gram 项才做近似判定（太短的内容什么都能撞上，宁可不判）。
 # 内容长度上限：content 最大字符数；超了直接拒绝。
 # 记忆标签：每条记忆都会带上的标签。
-# 越权全局降级为个人：true = 写 global 被位拦下时降级成自己的 user；false = 直接拒。
+# 越权全局降级为个人：true = 非主人写 global 时降级成自己的 user；false = 直接拒。
 #   非主人写 global 已被归属硬判拒（MemorySkill 的 guardWriteScope），走不到这一路。
 # 时间格式：条目里时间的格式（recall/search 的行现在不带时间时不会渲染）。
-# 权限不在这里配：管数据隔离的是技能自己的归属硬判（归属硬判仍在，仍是隔离的主要手段）—— memory 是 C 类、C 类对非主人只有 R（RWX 只有 SYSTEM 有），非主人写一律被位拦下：
+# 权限不在这里配：四个动作各判自己的 op（memory.remember / recall / search / forget，技能管控表：
+#   空 = 未授权 = 不可用），管数据隔离的仍是技能自己的归属硬判：
 #   非主人只能动自己的 user（本人 QQ）与本群的 group；写 global、写/读别人的 user、写别的群、
 #   删非本人的记忆一律拒。主人与她本人照常（MemorySkill 的 remember / guardWriteScope / guardReadScope / forget）。
-#   要放开只有主人写例外一个入口：perms.json，或她的 perm 工具授权 op；拒绝文案带 [权限阻断] 标识。
+#   要放开只有主人写技能管控表这一个入口（skillctl.json 的 Run/Ban 条目，或她的 perm 工具授权 op）；
+#   拒绝文案带 [权限阻断] 标识。

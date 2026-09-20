@@ -60,22 +60,23 @@
 写入失败: [file] 写入失败：{path}
 
 ## 说明
-# 能碰什么 = **唯一权威是 ACL**：技能不自己设"路径必须落在数据根以内"的上限 —— 相对路径按 conf.root()
-#   解析（那是"相对于谁"的语义），绝对路径原样采用；于是数据根以外的 A 类资源（例如 D:\Share\**\x.mp3）
-#   也进得来，账本给 A 类写的例外才有工具用得上。主人恒全权（A/B/C/E 都可以）；她本人（SYSTEM）走自己的
-#   默认档（A:R B:RW C:RWX E:RWX）；普通人/群走默认档 + **权限例外清单**（清单就是上限：A 类默认一位都不给，
-#   要开就写 A["User123","D:/share","R"] 这类条目）。判定点：read/list/find 判 R、write 判 W、
-#   download 先判工具 X 再判落点 W。**被拒时回执是 ACL 的原文**（形如「缺 R 位 —— [权限阻断] …」），
-#   会点明缺哪一位 —— 不要在这里另造一句，调用方要靠它判断要不要升级到更重的工具。
+# 能碰什么 = **唯一权威是技能管控表（op）**：技能不自己设"路径必须落在数据根以内"的上限 —— 相对路径按 conf.root()
+#   解析（那是"相对于谁"的语义），绝对路径原样采用；于是数据根以外的文件（例如 D:\Share\**\x.mp3）
+#   也进得来，只要那个 op 被放行。五个动作各判自己的 op：file.read / file.list / file.find /
+#   file.download / file.write（每个动作分支开头判一次）。判定看 data/skillctl.json：Run 白名单 = 可用、
+#   Ban 黑名单 = 不可用、空 = 未授权 = 不可用（Ban > Run > 空）；MASTER 与她本人 SYSTEM 恒全权。
+#   **被拒时回执就是拒绝原文**（形如「[权限阻断] 「file.write」没有授权给你（未授权 = 不可用）」）——
+#   不要在这里另造一句，调用方要靠它判断要不要换别的工具。事实块 caller.ops 就是授权清单。
 # 结构性防护仍在（这些不是权限）：① getCanonicalFile() 抵掉 .. 与符号链接；② toRealPath() 把目录联接
-#   （junction）解成真实位置 —— ACL 判的是真身，别名（软链/junction）换不来资源类别；find/list 的扫描
+#   （junction）解成真实位置 —— 别名（软链/junction）骗不过这两道；find/list 的扫描
 #   条数与深度上限也照旧。路径写法系统不接受时用上面的「路径非法」文案（这是输入不合法，不是权限拒绝）。
 # download：只下 http/https，落点固定在数据目录的 files/ 里，落点参数仍受 canonical 前缀 + 真身前缀两道校验
-#   （「下载越界」）—— 那是这个 op 的语义（落点必须在 files/），不是权限；能不能往 files/ 写仍由 needPath(dst,'W') 判。
+#   （「下载越界」）—— 那是这个 op 的语义（落点必须在 files/），不是权限；能不能下载已由分支开头的
+#   h.need("file.download") 判过。
 #   下载走基板的带闸门入口 Http.download —— 环回/私网/链路本地/云元数据一律拒绝，且每一跳重定向复检
 #   （判定本体在 kit/NetGuard，技能改不动）；被拒时用上面的「下载拒绝内网」文案。
 #   跳转链没走通（3xx 但没有 Location / 超过 5 跳）用「下载跳转异常」。
-# write：判路径写位（FileSkill 的 write 分支 needPath(f,'W')）：B 类写不进（B 类对非主人无位（∅））；files\ 树属 C、无专有位 ⇒ 非主人只读（R），非主人写不进。
+# write：判这个动作自己的 op（FileSkill 的 write 分支开头 h.need("file.write")），判不过就把拒绝原文原样回给调用方。
 #   写前把字节数写进控制台日志再落盘。
 # read/find 的文本解码：基板 kit/Text 自动探测（BOM → 严格 UTF-8 → GBK → GB18030 → UTF-8 兜底），
 #   GBK/ANSI 的 txt 不再整篇乱码；控制台会打一行「按 GBK 解码：路径」。

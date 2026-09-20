@@ -41,8 +41,9 @@
 时间格式: yyyy-MM-dd HH:mm
 
 ## 说明
-# set / remove 是敏感 op：代码里先做归属硬判（MASTER / SYSTEM 放行，ALLUSER 一律拒，
-#   拒绝文案带 [权限阻断] 标识）。list 只读通用 kv 表（C 类 R 位，默认就有），没有身份门槛。
+# set / list / remove 三个动作各判自己的 op（trigger.set / trigger.list / trigger.remove，
+#   技能管控表：空 = 未授权 = 不可用）。set / remove 另做归属硬判（MASTER / SYSTEM 放行，ALLUSER 一律拒，
+#   拒绝文案带 [权限阻断] 标识）；list 没有身份门槛 —— 它只读那张全局共享的词表。
 # 没有设置：一个词都没真的落库（全超长、或已达「最多触发词」）时的回执 —— 那时候不能说"已设置"；
 #   {note} 是逐条原因（触发词太长 / 触发词太多），{count} 是词表当前总数。
 # 冷却秒：同一个会话里同一个触发词两次接话之间的最小间隔（0 = 不冷却）；冷却期内也不回（投一票"别自动回"）。

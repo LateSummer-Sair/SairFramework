@@ -327,6 +327,16 @@ public class GroupImpressionSkill implements Skill, Hooked, ContextProvider {
         return null;
     }
 
+    /**
+     * 本插件<b>不提供工具</b>（md 里没有 {@code tool:}）⇒ <b>没有 op 可声明</b>：
+     * 技能管控表管的是工具（模型能调的那些动作），而它的三种身份都是钩子 / 扩展点，
+     * 由基板派发、跑在 SYSTEM 主体上（她自己的自主行为，恒放行）。
+     */
+    @Override
+    public void declareOps(sair.v4.auth.OpList ops) {
+        // 没有工具 = 没有 op
+    }
+
     // ================================================================ ② Hooked：事件入口
 
     @Override
@@ -387,18 +397,9 @@ public class GroupImpressionSkill implements Skill, Hooked, ContextProvider {
     private static boolean flush(Host h, Cfg c, long gid, Ev e, long now) {
         Store s = store(h);
         if (s == null) return false;
-        // 资源判定（ACL）：自主钩子（on_message）主体是 SYSTEM（她自己的 C 是 RWX）—— 读 grouplog（C:R）
-        // + 写自己的群印象库（C:W）都放行：她自己的氛围统计不被默认分配误伤。
-        String denyLog = h.needDb(LIB_LOG, 'R');
-        if (denyLog != null) {
-            log(h, "读不了 grouplog：" + denyLog);
-            return false;
-        }
-        String denyLib = h.needDb(LIB, 'W');
-        if (denyLib != null) {
-            log(h, "写不了群印象库：" + denyLib);
-            return false;
-        }
+        // 权限口径：本插件是纯行为插件（md 里没有 tool:、不提供工具）⇒ 没有任何 op 要判 ——
+        // 技能管控表管的是工具（模型能调的那些动作），而 on_message 由基板派发、主体是 SYSTEM（她自己的自主行为，恒放行）。
+        // 读写面只有两个：只读 grouplog、只写自己的 group_impression。
         JsonObject row = find(h, gid);
         long since = row == null ? 0L : J.l(row, "last_write", 0L);
         JsonObject f = window(gid, since);
@@ -486,17 +487,7 @@ public class GroupImpressionSkill implements Skill, Hooked, ContextProvider {
     private static boolean distill(Host h, Cfg c, JsonObject row, long now) {
         Store s = store(h);
         if (s == null || row == null) return false;
-        // 自主钩子（on_timer）主体是 SYSTEM：读 grouplog（C:R）+ 写群印象库（C:W）都要判。
-        String denyLog = h.needDb(LIB_LOG, 'R');
-        if (denyLog != null) {
-            log(h, "蒸馏读不了 grouplog：" + denyLog);
-            return false;
-        }
-        String denyLib = h.needDb(LIB, 'W');
-        if (denyLib != null) {
-            log(h, "蒸馏写不了群印象库：" + denyLib);
-            return false;
-        }
+        // 权限口径同上：on_timer 也由基板派发、主体是 SYSTEM；本插件没有工具 ⇒ 没有 op 要判。
         long gid = J.l(row, "group_id", 0L);
         long id = J.l(row, "id", 0L);
         if (gid <= 0L || id <= 0L) return false;

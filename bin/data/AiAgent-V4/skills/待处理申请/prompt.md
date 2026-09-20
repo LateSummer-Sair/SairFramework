@@ -9,7 +9,7 @@
 默认加群子类型: add
 # 系统消息动作：留空 = pending 只读 kv 清单（不查实时）。
 # 填 NapCat 支持的动作名（要能从 napcat 工具 action=list 的目录里挑到，基板目录见 Api.catalog()）后，pending 会实时问一次群系统消息。
-# 这个动作属 E 类对外动作：非主人默认拒（要放开得主人在账本 perms.json 写 E 例外）。
+# 这个动作也走技能管控表：op 名 = napcat.<动作名>，表里没放行就发不出去（非主人默认拿不到）。
 系统消息动作: 
 
 # ---- 文案 ----
@@ -30,10 +30,13 @@
 清单已移出: 已从待处理清单里移出 {key}。
 
 # ---- 说明 ----
-# 仅主人：这个键已不参与判定（approve/reject 属 E 类对外动作，非主人一律拒）。
+# 仅主人：这个键已不参与判定（approve/reject 各判自己的 op：request.approve / request.reject）。
 # 待处理最多：pending 最多列多少条。
 # 默认加群子类型：approve/reject 处理群申请时，没给 subtype 就用它（add=加群，invite=邀请）。
 # 清单键格式：pending:friend:<flag> / pending:group:<flag>，字段名与「申请审批」钩子的记录一致。
 # 占位符：{i} 序号 {n} 条数 {type} friend|group {qq} QQ号 {group} 群号 {flag} 申请标识
 #   {subtype} add|invite {comment} 验证信息 {source} kv|hook|live {keys} 用到的钩子键 {key} 清单键
-#   {op} op 名 {ops} 可用 op 清单 {k} 缺的参数名 {err} 失败原因 {deny} 基板权限文案
+#   {op} op 名 {ops} 可用 op 清单 {k} 缺的参数名 {err} 失败原因 {deny} 技能管控表的拒绝原文
+# 权限不在这里配：能不能用由技能管控表（skillctl.json）的 op 决定 —— request.pending / request.approve /
+#   request.reject（判定在动作分支开头），approve/reject 另判发出去的那个 NapCat 动作自己的 op
+#   （napcat.set_friend_add_request / napcat.set_group_add_request）；表里空 = 未授权 = 不可用。

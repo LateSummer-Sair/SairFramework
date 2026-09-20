@@ -1,0 +1,211 @@
+{
+  "version": 6,
+  "_readme": "技能管控表（基板读这一份；以 // 开头的整行是注释，只给人看，读之前整行丢掉）。三个块：Skill = 谁能用哪些 op；DB = 谁能改 / 谁能读哪类数据（改命中后还要看这一行是不是他自己的）；File = 谁能碰哪些路径（目录写成末尾带斜杠 = 整棵子树，最长路径优先）。规则层的键一律写成中括号数组：[\"a\", \"b\"] 与分别写 \"a\" 与 \"b\" 等价。优先级：更具体的键优先，同一个键上 Ban 压过 Run 与 Read；没列到：Skill 不能用、DB 能读不能改、File 不能碰。身份写法：user:<QQ> / group:<群号> / ALLUSER（裸 QQ 号 = user:<QQ>）；主人（MASTER）与她本人（SYSTEM）恒全权，不受本表影响，不用写进表里",
+
+  // ───────── 技能：谁能用哪些 op ─────────
+  "Skill": {
+    // ── 谁能用（没列到 = 未授权）
+    "Run": {
+      // ── 多 Agent（agent）
+      // 任务清单表
+      // 单个任务状态
+      ["agent.list", "agent.status"]: ["ALLUSER"],
+      // ── 到点的事（alarm）
+      // 记一件到点的事
+      // 清空自己的
+      // 顺延或排期
+      // 办妥收尾
+      // 没办成收尾
+      // 闹钟清单
+      // 删一条
+      ["alarm.add", "alarm.clear", "alarm.defer", "alarm.done", "alarm.fail", "alarm.list", "alarm.remove"]: ["ALLUSER"],
+      // ── 基板配置自省（config）
+      // 看一个键
+      // 列已知配置键
+      ["config.get", "config.list"]: ["ALLUSER"],
+      // ── 上下文注入（ctx）
+      // 列当前注入项
+      ["ctx.list"]: ["ALLUSER"],
+      // ── 直连 DeepSeek（model）
+      // 查余额
+      // 当前模型信息
+      // 模型清单
+      ["model.balance", "model.info", "model.models"]: ["ALLUSER"],
+      // ── NapCat（napcat）
+      // 获取群公告
+      // 能否发图
+      // 能否发语音
+      // 获取合并转发内容
+      // 获取好友列表
+      // 拉取私聊历史消息
+      // 查询 @全体成员 剩余次数
+      // 获取群信息
+      // 获取群列表
+      // 获取群成员信息
+      // 获取群成员列表
+      // 拉取群聊历史消息
+      // 获取图片文件
+      // 获取登录号信息
+      // 获取消息详情
+      // 获取最近联系人
+      // 获取语音文件
+      // 获取运行状态
+      // 获取陌生人信息
+      // 获取实现版本信息
+      // 图片文字识别
+      ["napcat._get_group_notice", "napcat.can_send_image", "napcat.can_send_record", "napcat.get_forward_msg", "napcat.get_friend_list", "napcat.get_friend_msg_history", "napcat.get_group_at_all_remain", "napcat.get_group_info", "napcat.get_group_list", "napcat.get_group_member_info", "napcat.get_group_member_list", "napcat.get_group_msg_history", "napcat.get_image", "napcat.get_login_info", "napcat.get_msg", "napcat.get_recent_contact", "napcat.get_record", "napcat.get_status", "napcat.get_stranger_info", "napcat.get_version_info", "napcat.ocr_image"]: ["ALLUSER"],
+      // ── 一、好感度（perm）
+      // 查一个人的好感度
+      // 好感度榜单
+      // 我是谁
+      ["perm.get", "perm.list", "perm.whoami"]: ["ALLUSER"],
+      // ── 技能库（skill）
+      // 技能清单
+      // 读技能说明书
+      // 技能库体检
+      ["skill.list", "skill.read", "skill.validate"]: ["ALLUSER"],
+      // ── 读写基板六库（store）
+      // 数行数
+      // 取一条
+      // 列库里的行
+      // 检索
+      ["store.count", "store.get", "store.list", "store.search"]: ["ALLUSER"],
+      // ── 六库管理（store_admin）
+      // 六库统计
+      ["store_admin.stat"]: ["ALLUSER"],
+      // ── 写基板六库（store_write）
+      // 删一行
+      // 写一行
+      // 改一行
+      ["store_write.delete", "store_write.put", "store_write.update"]: ["ALLUSER"],
+      // ── 能力自省（tools）
+      // 列你能用的工具
+      // 按意图找工具
+      // 读一把工具的说明书
+      ["tools.list", "tools.search", "tools.show"]: ["ALLUSER"]
+    },
+    // ── 谁不能用（压过 Run）
+    "Ban": {
+      // ── 多 Agent（agent）
+      // 派一个子 Agent
+      // 中断在跑的回合
+      ["agent.spawn", "agent.stop"]: ["ALLUSER"],
+      // ── 基板配置自省（config）
+      // 改一个键
+      ["config.set"]: ["ALLUSER"],
+      // ── SFW 控制台（console）
+      // 清屏
+      // 最近的框架命令
+      // 往控制台打一行
+      // 读控制台最近的输出
+      // 跑一条框架命令
+      // 控制台规模
+      // 当前可见全文
+      ["console.clear", "console.history", "console.print", "console.read", "console.run", "console.size", "console.visible"]: ["ALLUSER"],
+      // ── 上下文注入（ctx）
+      // 清空注入
+      // 往槽位注入文本
+      ["ctx.clear", "ctx.inject"]: ["ALLUSER"],
+      // ── 动态执行（exec）
+      // 执行系统命令
+      // 编译并运行一段 Java
+      ["exec.cmd", "exec.java"]: ["ALLUSER"],
+      // ── 直连 DeepSeek（model）
+      // 问一句
+      // 看图
+      ["model.chat", "model.vision"]: ["ALLUSER"],
+      // ── NapCat（napcat）
+      // 发布群公告
+      // 删除好友
+      // 撤回消息
+      // 私聊戳一戳
+      // 获取登录态 Cookies
+      // 群内戳一戳
+      // 标记消息已读
+      // 发送群合并转发
+      // 发送群消息
+      // 给好友点赞
+      // 发送私聊合并转发
+      // 发送私聊消息
+      // 处理加好友请求
+      // 处理加群/邀请请求
+      // 设置/取消群管理
+      // 群禁言
+      // 设置群名片
+      // 踢人
+      // 退群
+      // 设置群名
+      // 群打卡
+      // 全员禁言开关
+      // 给消息贴表情回应
+      // 修改账号资料
+      // 修改个性签名
+      // 上传群文件
+      // 上传私聊文件
+      ["napcat._send_group_notice", "napcat.delete_friend", "napcat.delete_msg", "napcat.friend_poke", "napcat.get_cookies", "napcat.group_poke", "napcat.mark_msg_as_read", "napcat.send_group_forward_msg", "napcat.send_group_msg", "napcat.send_like", "napcat.send_private_forward_msg", "napcat.send_private_msg", "napcat.set_friend_add_request", "napcat.set_group_add_request", "napcat.set_group_admin", "napcat.set_group_ban", "napcat.set_group_card", "napcat.set_group_kick", "napcat.set_group_leave", "napcat.set_group_name", "napcat.set_group_sign", "napcat.set_group_whole_ban", "napcat.set_msg_emoji_like", "napcat.set_qq_profile", "napcat.set_self_longnick", "napcat.upload_group_file", "napcat.upload_private_file"]: ["ALLUSER"],
+      // ── 一、好感度（perm）
+      // 封禁
+      // 在已有权限文件里重排
+      // 清空好感度
+      // 撤回条目
+      // 授权
+      // 直接定好感度
+      // 看合并后的权限表
+      ["perm.ban", "perm.gen", "perm.reset", "perm.revoke", "perm.run", "perm.set", "perm.show"]: ["ALLUSER"],
+      // ── 提示词（prompt）
+      // 列提示词文件
+      // 读一份提示词
+      // 初始提示词的分节名
+      // 看初始身份提示词
+      ["prompt.list", "prompt.read", "prompt.sections", "prompt.show"]: ["ALLUSER"],
+      // ── 提示词注入与写入（prompt_write）
+      // 移除注入
+      // 注入一段文本
+      // 载入一份提示词并注入
+      // 重载初始提示词
+      // 新建或覆盖提示词文件
+      ["prompt_write.clear", "prompt_write.inject", "prompt_write.load", "prompt_write.reload", "prompt_write.write"]: ["ALLUSER"],
+      // ── 技能库管理（skill_write）
+      // 新增技能
+      // 删技能
+      // 写草稿
+      // 列草稿
+      // 草稿搬进技能库
+      // 读技能 java 源码
+      // 重扫技能库
+      // 覆盖技能内容
+      ["skill_write.add", "skill_write.delete", "skill_write.draft", "skill_write.drafts", "skill_write.promote", "skill_write.read_source", "skill_write.reload", "skill_write.update"]: ["ALLUSER"],
+      // ── 六库管理（store_admin）
+      // 导出 JSONL
+      // 导入覆盖
+      // 维护清理
+      // 合并全文索引段
+      // 回收空闲页
+      ["store_admin.export", "store_admin.import", "store_admin.maintain", "store_admin.optimize", "store_admin.vacuum"]: ["ALLUSER"]
+    }
+  },
+
+  // ───────── 数据（键 = 类别）：谁能改、谁能读、谁不能 ─────────
+  "DB": {
+    // ── 谁能改（命中还要看这一行是不是他自己的）
+    "Run": {},
+    // ── 谁能读（没列到 = 默认能读）
+    "Read": {},
+    // ── 谁不能改也不能读（压过 Run 与 Read）
+    "Ban": {}
+  },
+
+  // ───────── 文件（键 = 路径；目录 = 整棵子树，最长路径优先） ─────────
+  "File": {
+    // ── 谁能改
+    "Run": {},
+    // ── 谁能读（没列到 = 不能读）
+    "Read": {
+      ["D:/share/"]: ["ALLUSER"]
+    },
+    // ── 谁不能碰（压过 Run 与 Read）
+    "Ban": {
+      ["D:/share/SairFrameWork/"]: ["ALLUSER"]
+    }
+  }
+}

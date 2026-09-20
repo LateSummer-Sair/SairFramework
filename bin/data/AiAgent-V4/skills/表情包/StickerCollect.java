@@ -348,10 +348,10 @@ public final class StickerCollect {
      * <p>顺序（与旧口径同一支，只换了"候选从哪来"）：</p>
      * <ol>
      *   <li><b>读候选行</b>：{@code kv} 的 {@code sticker:cand/} 前缀（一次 {@code kvList}，零网络）。
-     *       <b>只读不删</b> —— 写位没过时一个字节都不该动（连生产者的键也不该删，删了就真丢了）；</li>
+     *       <b>只读不删</b> —— 先读出来（读失败一次不该把生产者的键抹掉：删了就真丢了）；</li>
      *   <li><b>残量队列</b>：读旧的 {@code queue.jsonl}。这条路的生产者 <b>{@code capture} 已停用</b>
      *       ⇒ 这里只作<b>残量清理</b>（整批丢弃 + 一行日志：不下载、不判定、不入库）；</li>
-     *   <li>总闸 / 写位检查（照旧：{@code 收集开关} 与 {@code 收集审查} 关着就只留一行日志、直接返回）；</li>
+     *   <li>总闸检查（{@code 收集开关} 与 {@code 收集审查} 关着就只留一行日志、直接返回）；</li>
      *   <li><b>消费候选</b>（{@link #consumeCandidates}）：读到即删键 → 判定 → 下载 → 去重 → 落盘 → 入库；</li>
      *   <li>磁盘账 + 状态 kv（照旧）。</li>
      * </ol>
@@ -403,16 +403,9 @@ public final class StickerCollect {
         }
         st.queueLeft = 0;
 
-        String denyFile = h.selfPath(dir.getAbsolutePath(), 'W');     // 钩子主体 SYSTEM ⇒ 正常放行
-        String denyDb = h.selfDb(LIB, 'W');
-        if (denyFile != null || denyDb != null) {
-            st.last = denyFile != null ? "deny_path" : "deny_db";
-            log(h, "自动收集跳过（缺写位）：" + (denyFile != null ? denyFile : denyDb));
-            writeStatus(store, st, c, dir);
-            return;                                                  // 候选键一行都没删，下一轮再来
-        }
-
         // ---- 4) 消费候选（判定来自候选行，全程零视觉调用）----
+        // 权限：本方法只由 on_timer 调用，那个钩子的判定主体是 SYSTEM（她自己的维护动作），
+        // 技能级 op 判定已经在钩子入口（StickerSkill.on）判过一次，这里不再重复判。
         consumeCandidates(h, c, cands, store, dir, st);
 
         if (diskDue) {
@@ -432,9 +425,8 @@ public final class StickerCollect {
     /**
      * 把 {@code kv} 里的候选行读出来（一次 {@code kvList}，<b>只读不删</b>）。
      *
-     * <p>为什么读与删分两步：写位（{@code h.selfPath/selfDb}）没过时<b>一个字节都不该动</b>
-     * —— 连生产者的键也不该删（删了就真丢了）。所以这里只读，删在 {@link #consumeCandidates}
-     * 里、且在写位检查<b>之后</b>。</p>
+     * <p>为什么读与删分两步：先读一次（零网络、只读），真要消费时才在 {@link #consumeCandidates}
+     * 里删 —— 读失败 / 这一轮不消费时，生产者的键一个都不该动（删了就真丢了）。</p>
      *
      * <p>一次最多读 {@link #CAND_SCAN_MAX} 行（按 key 升序，即 md5 序）：超出的<b>留在 kv 里</b>
      * 下一轮再读（本轮不删它们 —— "读到即删"只针对真读到的行）。</p>

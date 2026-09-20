@@ -20,17 +20,15 @@ import sair.v4.skill.Skill;
  * 钩子逻辑仍在 {@link ModerationHook}，这里只做转发 —— 这样一个技能文件夹里既能挂 {@code on_message}
  * 钩子，又能给模型一个改配置的工具（V3 用能力 {@code 群审核.moderation.config} 达到同样效果）。</p>
  *
- * <h3>权限（ACL 资源模型）</h3>
+ * <h3>权限（技能管控表：op）</h3>
  * <ul>
- *   <li>读配置只判 {@code kv} 的读位（C:{@code R}）—— 默认位就是 {@code R}，所以非主人也读得到；</li>
- *   <li><b>任何写操作</b>（on / words / mute / roles / users / warn / note / clear）先过<b>归属 / 角色硬判</b>
- *       （{@link ModCfg#writeDeny}）：主人（{@code MASTER}）与她自己的自主行为（{@code SYSTEM}）照常；
- *       普通用户（{@code ALLUSER}）只允许改<b>自己所在群</b>且自己在该群是群主/管理员的配置，
- *       跨群写入一律拒（拒绝文案以 {@code [权限阻断]} 开头）。
- *       <b>这一判不是权限位</b>：C 类（kv）对非主人只有 {@code R}（写被位拦下），
- *       {@code h.needDb("kv", 'W')} 拦得住普通用户的写 —— 旧档位里"默认只有 {@code R} ⇒ 非主人改不动策略"
- *       那条防线回来了（归属硬判仍然保留）；而这里的群号还是调用方给的参数，只能靠显式判定拦住。
- *       写位判定仍保留在原处，它只回答"库能不能写"，归属问题由这道硬判回答。</li>
+ *   <li>本工具只有一个动作 {@code config}（读与写共用）⇒ op = <b>{@code moderation.config}</b>：
+ *       在 {@link #config} 的入口判一次，账本里没给它授权的身份 = 不可用（拒绝文案带 {@code [权限阻断]}）；
+ *       主人与她自己的自主行为（{@code SYSTEM}）不受管控表影响。</li>
+ *   <li><b>写操作</b>（on / words / mute / roles / users / warn / note / clear）在 op 之外再过一道
+ *       <b>归属 / 角色硬判</b>（{@link ModCfg#writeDeny}）：普通用户（{@code ALLUSER}）只允许改
+ *       <b>自己所在群</b>且自己在该群是群主/管理员的配置，跨群写入一律拒（拒绝文案以 {@code [权限阻断]} 开头）。
+ *       这一判回答的是"这是不是你的群"—— op 回答不了（群号是调用方给的参数），两件事都保留。</li>
  * </ul>
  *
  * <p>{@code op=config} 的所有话术都读自同目录 {@code prompt.md}（缺键 = 明确报缺键，没有兜底）。</p>
@@ -42,14 +40,19 @@ public class ModerationSkill implements Skill, Hooked {
     /** 钩子逻辑（同一个技能文件夹里的另一个类）。 */
     private final ModerationHook hook = new ModerationHook();
 
-    /** 审核配置落在通用 kv 表（键前缀 {@code modcfg:}，C 类运行时数据）—— 资源判定用的库名。 */
-    private static final String LIB_KV = "kv";
-
     // ================================================================ 钩子转发
 
     @Override
     public void on(String hookName, JsonObject payload, Host h) {
         hook.on(hookName, payload, h);
+    }
+
+    /**
+     * 声明本技能的全部 op：本工具只有一个动作 {@code config}（读/写按群审核配置共用它）。
+     */
+    @Override
+    public void declareOps(sair.v4.auth.OpList ops) {
+        ops.add(TOOL, "config", "读/写按群审核配置（开关、违规词、禁言秒数、豁免、文案）");
     }
 
     // ================================================================ 工具
@@ -70,6 +73,9 @@ public class ModerationSkill implements Skill, Hooked {
     // ---------------------------------------------------------------- op=config
 
     private static String config(Args a, Host h) {
+        // op 判定：本工具的读与写都走这一个动作 ⇒ op = moderation.config（技能管控表按它放行/封禁）。
+        String deny = h.need("moderation.config");
+        if (deny != null) return deny;
         Caller caller = h.caller();
         long group = a.l("group", 0L);
         if (group <= 0L && caller != null && caller.groupId() > 0L) group = caller.groupId();
@@ -79,16 +85,11 @@ public class ModerationSkill implements Skill, Hooked {
         boolean write = !fields.isEmpty() || clear;
 
         if (write) {
-            // 归属 / 角色硬判（隔离手段，不是权限位）：写配置必须是主人，或"目标群就是我说话的群
+            // 归属 / 角色硬判（隔离手段，不是 op 授权）：写配置必须是主人，或"目标群就是我说话的群
             // 且我是这个群的群主/管理员"。跨群写入一律拒 —— 群号是调用方给的参数，
             // 没有这一判任何人都能改任意群的群规（详见 ModCfg.writeDeny）。
             String owner = ModCfg.writeDeny(caller, group);
             if (owner != null) return owner;
-            // 资源判定（ACL）：改审核配置 = 写通用 kv 表（键 modcfg:<群号>，C 类）→ 判写位。
-            // C 类对非主人只有 R（写被位拦下），所以这一判也拦住非主人的写；
-            // "谁能改配置"由上面那条归属硬判回答。
-            String deny = h.needDb(LIB_KV, 'W');
-            if (deny != null) return deny;
             if (group <= 0L) return ModCfg.text(h, "缺群号");
         }
         if (group <= 0L) {

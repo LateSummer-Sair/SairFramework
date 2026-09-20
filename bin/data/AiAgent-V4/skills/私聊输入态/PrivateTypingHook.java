@@ -23,8 +23,8 @@ import sair.v4.skill.Host;
  * through the <b>gated</b> Api instance with an explicit {@code SYSTEM} binding (so ordinary users
  * see the indicator too, not just the master); it is already a no-op in a group and without a QQ
  * number. This plugin deliberately never reaches for {@code host().napcat()} and never names an
- * action itself: that path is permission-gated, and the substrate has already collapsed this use
- * case into one named action on purpose.</p>
+ * action itself: that path is judged by the skill control table (op), and the substrate has already
+ * collapsed this use case into one named action on purpose.</p>
  *
  * <h3>Group chats and the local console: nothing at all</h3>
  * <p>{@code b.group()} / {@code b.console()} short-circuit <b>before</b> the config read and before

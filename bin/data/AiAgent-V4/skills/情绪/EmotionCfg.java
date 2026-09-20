@@ -44,8 +44,10 @@ public final class EmotionCfg {
     public static final String NAME = "情绪";
 
     /** 兜底默认值（真正生效的值在 prompt.md；这里只是"文件读不到时"的下限）。
-     *  <p>预算与 prompt.md 的出厂值<b>同源</b>（400；五行中文块实测最坏 382，见 prompt.md 那段注释）。</p> */
-    public static final int DEF_BUDGET = 400;
+     *  <p>预算与 prompt.md 的出厂值<b>同源</b>（v2 = 1000；情绪块现在最多<b>六行</b>
+     *  〔事实 / 语气 / 范例 / 边界 / 自报 / 覆盖〕，见 prompt.md 的「预算」那一段）。
+     *  <b>改这一处必须同时改 prompt.md 的那一行</b> —— 否则"装配前"与"装配后"会读到两个上限。</p> */
+    public static final int DEF_BUDGET = 1000;
     public static final double DEF_DECAY_MIN = 1.0d;
     public static final double DEF_ANGER_DECAY = 2.0d;
     public static final double DEF_SAD_DECAY = 1.5d;

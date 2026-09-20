@@ -52,8 +52,8 @@
 # 背景色：写 jpg/bmp 时把透明区压平用的颜色（#RRGGBB）。
 # 覆盖已存在：只对 convert 生效 —— true = 允许覆盖同名输出文件；false（默认）= 目标存在就跳过。rename 恒不覆盖（同名即 skip，不看这个开关）。
 # 只收图片：ext/from 不填时，是否只收「图片后缀」里的文件（false = 收该目录下所有普通文件）。
-# 权限不在这里配：两个 op 逐目标判位 —— rename 在写前循环里判「源文件 W + 目标 W」（BatchSkill 的写前循环 needPath(目标,'W')）、
-#   convert 判「源图 R + 目标图 W」（BatchSkill 的读源图判定 needPath(from,'R')）。判不过只让那一个目标失败（fail++），
-#   ACL 拒绝原文照样收进结果，不是整批一律拒。B 类：ALLUSER 无位（∅）⇒ 非主人改不了数据根里 files\ 以外的部分；
-#   files\ 树属 C、无专有位 ⇒ 非主人只读（R）⇒ 非主人改不动。
-#   要放宽只能让主人改数据根 perms.json 的例外条目（唯一入口是 perm 工具的 op=grant / op=revoke）。
+# 权限不在这里配：两个 op 各自在动作分支开头判一次自己那个 op —— rename 判 batch.rename、
+#   convert 判 batch.convert（BatchSkill 里的 h.need("batch.<动作>")）；判不过就把拒绝原文原样回给调用方，
+#   一个字节都不动。授权与否看技能管控表 data/skillctl.json（op 放行才动手；Ban / 空 = 不可用），
+#   事实块 caller.ops 就是"这个身份能用的技能/动作清单"。
+#   要放宽只有主人改管控表（或她用 perm 工具的授权 op）。

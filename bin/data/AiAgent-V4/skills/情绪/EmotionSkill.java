@@ -132,14 +132,7 @@ public class EmotionSkill implements Skill, Hooked {
         if (!c.flag("开关", true)) return;
         Store s = store(h);
         if (s == null) return;
-        // 资源判定（ACL）：自主钩子（on_message）主体是 SYSTEM（她自己的 C 类是 RWX）—— 累积情绪要读写 emotion 库，
-        // 她自己的状态维护不被默认分配误伤。
-        String denyRead = h.needDb(EmotionState.LIB, 'R');
-        String denyWrite = h.needDb(EmotionState.LIB, 'W');
-        if (denyRead != null || denyWrite != null) {
-            log(h, "情绪库读写不了：" + (denyRead != null ? denyRead : denyWrite));
-            return;
-        }
+        // 本插件不提供工具（没有 op 可判）：自主钩子跑在 SYSTEM 主体上，读写自己的表恒放行。
 
         Ev e = Ev.parse(payload);
         if (!e.isMessage()) return;                        // message_sent（机器人自己发的）不管
@@ -177,12 +170,7 @@ public class EmotionSkill implements Skill, Hooked {
         if (!c.flag("通知钩子", true)) return;
         Store s = store(h);
         if (s == null) return;
-        // 自主钩子路径主体 = SYSTEM ⇒ 能写自己的账本
-        String deny = h.needDb(EmotionState.LIB, 'W');
-        if (deny != null) {
-            log(h, "情绪库写不了（通知钩子）：" + deny);
-            return;
-        }
+        // 本插件不提供工具（没有 op 可判）：自主钩子跑在 SYSTEM 主体上，写自己的表恒放行。
         try {
             EmotionMood.onNotice(s, c, h, payload);
             EmotionMood.flush(s);
@@ -205,13 +193,7 @@ public class EmotionSkill implements Skill, Hooked {
         if (!c.flag("开关", true)) return;
         Store s = store(h);
         if (s == null) return;
-        // 自主钩子（on_timer）：衰减要读写 emotion 库，主体是 SYSTEM（C:RWX）
-        String denyRead = h.needDb(EmotionState.LIB, 'R');
-        String denyWrite = h.needDb(EmotionState.LIB, 'W');
-        if (denyRead != null || denyWrite != null) {
-            log(h, "情绪库读写不了：" + (denyRead != null ? denyRead : denyWrite));
-            return;
-        }
+        // 本插件不提供工具（没有 op 可判）：自主钩子跑在 SYSTEM 主体上，读写自己的表恒放行。
         long now = payload == null ? 0L : J.l(payload, "ts", 0L);
         if (now <= 0L) now = System.currentTimeMillis();
         int n = EmotionState.decayAll(s, c, now);

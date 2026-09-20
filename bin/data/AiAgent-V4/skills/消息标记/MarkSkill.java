@@ -25,8 +25,9 @@ import sair.v4.store.Store;
  * 值 = 一段 JSON（mark / note / ts / by / session）。列表用 {@code kvList(前缀)}、
  * 清除用 {@code kvDelete(键)} —— 不自己写 SQL。</p>
  *
- * <p>三个 op：{@code set}（打标记；mark 与 note 都空 = 删掉这个标记）、{@code get}（读一条）、
- * {@code list}（列出所有标记，可按关键词过滤）。文案/阈值/键前缀全在 {@code prompt.md}。</p>
+ * <p>四个 op：{@code set}（打标记；mark 与 note 都空 = 删掉这个标记）、{@code get}（读一条）、
+ * {@code list}（列出所有标记，可按关键词过滤）、{@code migrate}（把旧键迁到新口径）。
+ * 文案/阈值/键前缀全在 {@code prompt.md}。</p>
  */
 public class MarkSkill implements Skill {
 
@@ -34,12 +35,19 @@ public class MarkSkill implements Skill {
     private static final String NAME = "消息标记";
     /** kv 键前缀的结构性兜底（真正生效的值在 prompt.md 的「键前缀」）。 */
     private static final String PREFIX_DEF = "mark:";
-    /** 标记落在通用 kv 表（C 类运行时数据）—— 判定用的库名。 */
-    private static final String LIB = "kv";
-    /** migrate 按 {@code grouplog} 判 msg_id 是否真存在 → 这一处也要判读位。 */
-    private static final String LIB_LOG = "grouplog";
 
     // ================================================================ 工具入口
+
+    /**
+     * 声明本技能的四个 op（技能管控表就是按这些名字放行或封禁的）。
+     */
+    @Override
+    public void declareOps(sair.v4.auth.OpList ops) {
+        ops.add("mark", "set", "打一个内部标记");
+        ops.add("mark", "get", "读一条标记");
+        ops.add("mark", "list", "列出标记");
+        ops.add("mark", "migrate", "把旧键迁到新口径");
+    }
 
     @Override
     public Object call(Args a, Host h) {
@@ -70,7 +78,8 @@ public class MarkSkill implements Skill {
      * 键 = {@code <前缀><session>/<msg_id>}：{@code kv} 的主键天然 upsert，同 (session,msg_id) 重复写只留一行。</p>
      */
     private static String set(Args a, Host h, Store s, Cfg c) {
-        String deny = check(h, 'W');
+        // 这个动作分支的 op 判定（技能管控表：op 放行才动手）
+        String deny = h.need("mark.set");
         if (deny != null) return deny;
         String target = target(a);
         if (target.isEmpty()) return a.missing("target");
@@ -129,17 +138,16 @@ public class MarkSkill implements Skill {
      * 绝不静默丢。返回 "改了几条 / 保留 legacy 几条"。</p>
      */
     private static String migrate(Store s, Host h, Cfg c) {
-        // migrate 既读也写 kv（还按 grouplog 判 msg_id 是否存在）→ 逐个资源判：kv 写位 + grouplog 读位。
-        String deny = check(h, 'W');
+        // 这个动作分支的 op 判定（技能管控表：op 放行才动手）—— migrate 既读也写 kv、
+        // 还要按 grouplog 判 msg_id 是否存在，但它们是同一个动作 {@code mark.migrate} 的内部步骤，
+        // 不再拆成第二个 op。
+        String deny = h.need("mark.migrate");
         if (deny != null) return deny;
-        String denyLog = h == null ? null : h.needDb(LIB_LOG, 'R');
-        if (denyLog != null) return denyLog;
         String prefix = P(c, "键前缀", PREFIX_DEF);
         int limit = atLeast(P(c, "迁移扫描条数", "1000"), 1, 5000);
         // 只扫<b>自己会话</b>的前缀（键 = <前缀><session>/<target>，与 set/get/list 同一把尺子）。
-        // 旧写法扫的是全库前缀 mark: —— 那是"把所有会话的行都回写一遍"，等于一次调用就跨会话写别人的数据；
-        // 而 C 类对非主人只有 R（RWX 只有 SYSTEM 有），needDb('W') 对非主人写一律被位拦下。收窄成会话前缀后：
-        // ① 迁移只补自己会话的行，别人的数据一个字节都不会被碰；② 谁都能安全地迁移自己那一摊。
+        // 旧写法扫的是全库前缀 mark: —— 那是"把所有会话的行都回写一遍"，等于一次调用就跨会话写别人的数据。
+        // 收窄成会话前缀后：① 迁移只补自己会话的行，别人的数据一个字节都不会被碰；② 谁都能安全地迁移自己那一摊。
         List<JsonObject> rows = s.kvList(scopePrefix(c, h), limit);
         if (rows == null) rows = new ArrayList<JsonObject>();
         int upgraded = 0, legacy = 0, kept = 0;
@@ -205,7 +213,8 @@ public class MarkSkill implements Skill {
 
     /** 读一条标记。 */
     private static String get(Args a, Host h, Store s, Cfg c) {
-        String deny = check(h, 'R');
+        // 这个动作分支的 op 判定（技能管控表：op 放行才动手）
+        String deny = h.need("mark.get");
         if (deny != null) return deny;
         String target = target(a);
         if (target.isEmpty()) return a.missing("target");
@@ -221,7 +230,8 @@ public class MarkSkill implements Skill {
 
     /** 列出所有标记（kvList 按前缀取），可给 query 在 Java 侧过滤 mark/note/键。 */
     private static String list(Args a, Host h, Store s, Cfg c) {
-        String deny = check(h, 'R');
+        // 这个动作分支的 op 判定（技能管控表：op 放行才动手）
+        String deny = h.need("mark.list");
         if (deny != null) return deny;
         int limit = a.i("limit", atLeast(P(c, "列表条数", "20"), 1, 500));
         if (limit <= 0) limit = atLeast(P(c, "列表条数", "20"), 1, 500);
@@ -395,22 +405,10 @@ public class MarkSkill implements Skill {
     // ================================================================ 小工具
 
     /**
-     * 资源判定（ACL）：本技能的标记全部落在通用 kv 表（C 类）—— 读判 {@code kv} 的 {@code R}、
-     * 写判 {@code kv} 的 {@code W}。
-     *
-     * <p>口径（新 ACL 模型）：C 类对非主人只有 {@code R}（{@code RWX} 只有 {@code SYSTEM} 有），所以写位这一判对普通用户不再放行（读位仍放行）——
-     * 它回答的是"库能不能写"，<b>不是</b>"这份数据是不是你的"。标记的隔离靠的是<b>键</b>：
-     * 键 = {@code <前缀><session>/<target>}，读（{@code list}）与写（{@code set}/{@code get}）
-     * 都按会话前缀走，迁移（{@code migrate}）同样只扫自己会话的前缀 —— 一个人碰不到别人的会话。
-     * （"非主人默认只有 R、写标记默认被拒"照旧成立：C 类对非主人只有 {@code R}，非主人写一律被位拦下。）</p>
-     *
-     * @param bit {@code 'R'} 读 / {@code 'W'} 写
+     * 标记的隔离靠<b>键</b>：键 = {@code <前缀><session>/<target>}，读（{@code list}）与写
+     * （{@code set}）都按会话前缀走，迁移（{@code migrate}）同样只扫自己会话的前缀 ——
+     * 一个人碰不到别人的会话（这是技能自己的归属设计，不是权限判定）。
      */
-    private static String check(Host h, char bit) {
-        if (h == null) return null;
-        return h.needDb(LIB, bit);
-    }
-
     private static String time(Cfg c, long ts) {
         if (ts <= 0L) return "";
         return new SimpleDateFormat(P(c, "时间格式", "yyyy-MM-dd HH:mm")).format(new Date(ts));

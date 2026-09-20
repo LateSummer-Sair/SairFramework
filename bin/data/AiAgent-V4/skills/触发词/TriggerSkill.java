@@ -28,11 +28,14 @@ import sair.v4.store.Store;
  *
  * <p>op {@code set / list / remove}，词表存在 kv（词条 {@code trigger:w:<词>}，冷却 {@code trigger:c:<会话>:<词>}）。</p>
  *
- * <p><b>写词表是主人的事（归属硬判，不是权限位）</b>：词表是<b>全局共享</b>的一份表
+ * <p><b>操作分两个动作、各判自己的 op</b>：{@code set} / {@code list} / {@code remove} 三个动作分支
+ * 开头各判一次 {@code trigger.set} / {@code trigger.list} / {@code trigger.remove}
+ * （技能管控表：空 = 未授权 = 不可用）；判不过就把基板的拒绝原文原样回给模型。</p>
+ *
+ * <p><b>写词表是主人的事（归属硬判，不是 op 判定）</b>：词表是<b>全局共享</b>的一份表
  * （键 {@code trigger:w:<词>} 里没有身份，任何人的 {@code list} 都看得见所有人的词），
- * 所以"这是不是你的数据"不能靠权限位回答 —— C 类（kv）对非主人只有 {@code R}（{@code RWX} 只有 {@code SYSTEM} 有），
- * {@code h.needDb("kv", 'W')} 对非主人一律拦下（非主人写一律被位拦下），它只剩"库在不在、能不能写"这一层意思。
- * 于是 {@code set}/{@code remove} 在它之外<b>显式判身份</b>：{@code MASTER} / {@code SYSTEM} 照常放行，
+ * 所以"这是不是你的数据"不能靠 op 回答 —— op 只回答"这个技能的这个动作给不给他用"。
+ * 于是 {@code set}/{@code remove} 在 op 判定之外<b>显式判身份</b>：{@code MASTER} / {@code SYSTEM} 照常放行，
  * {@code ALLUSER} 一律拒绝（拒绝文案以 {@code [权限阻断]} 开头）。
  * 命中时的冷却与用量回写、{@code list} 读取都不受这条影响。</p>
  *
@@ -54,8 +57,14 @@ public class TriggerSkill implements Skill, Hooked {
     private static final String COOL = "trigger:c:";
     private static final String LAST = "trigger:last";
     private static final int KV_SCAN = 500;
-    /** 触发词表落在通用 kv 表（C 类运行时数据）—— 资源判定用的库名。 */
-    private static final String LIB_KV = "kv";
+
+    /** 本技能全部 op（一个动作一条）：装载期声明，技能管控表就是按这些名字放行或封禁的。 */
+    @Override
+    public void declareOps(sair.v4.auth.OpList ops) {
+        ops.add("trigger", "set", "设置 / 覆盖触发词");
+        ops.add("trigger", "list", "看触发词表");
+        ops.add("trigger", "remove", "删除触发词（或清空）");
+    }
 
     // ==================================================================== 工具
 
@@ -83,10 +92,10 @@ public class TriggerSkill implements Skill, Hooked {
      * 写词表的<b>归属硬判</b>：{@code MASTER}（主人）与 {@code SYSTEM}（她自己的自主行为、定时维护）放行，
      * {@code ALLUSER}（普通用户）一律拒。
      *
-     * <p>为什么必须是硬判而不是权限位：词表键 {@code trigger:w:<词>} <b>不含任何身份</b>，
+     * <p>为什么必须是硬判而不是 op 判定：词表键 {@code trigger:w:<词>} <b>不含任何身份</b>，
      * 一份表全局共享 —— 一个人 {@code set} 的词会出现在任何人的 {@code list} 里。
-     * 而 C 类（kv）对非主人只有 {@code R}（{@code RWX} 只有 {@code SYSTEM} 有），{@code h.needDb("kv", 'W')} 对非主人一律拦下，
-     * 它不能回答"这是不是你的数据"（位这一层只说"库能不能写"：C 类对非主人只有 {@code R} ⇒ 非主人写一律被位拦下）。</p>
+     * op（{@code trigger.set} / {@code trigger.remove}）只回答"这个动作给不给他用"，
+     * 它不能回答"这是不是你的数据"（全局共享的表压根没有"谁的词"这一维度）。</p>
      *
      * <p>拒绝文案以 {@code [权限阻断]} 开头（结构前缀，不是 prompt.md 文案）：
      * 这是归属判定，不是可配置话术，改文案不该改得了它。</p>
@@ -107,13 +116,13 @@ public class TriggerSkill implements Skill, Hooked {
     // ---------------------------------------------------------------- set
 
     private static String set(Args a, Host h, Cfg c) {
-        // 归属硬判（ACL 新口径）：写触发词表 = 改一份全局共享的表，只有主人与她自己的自主行为能改。
-        // 这一判与下面的资源判定是两件事：那个判"库能不能写"，这个判"这是不是你能碰的数据"。
+        // 技能管控表：这个动作自己的 op —— 判不过就把拒绝原文原样回给模型，一个字节都不写。
+        String deny = h.need("trigger.set");
+        if (deny != null) return deny;
+        // 归属硬判（技能管控表之外的那一道）：写触发词表 = 改一份全局共享的表，只有主人与她自己的自主行为能改。
+        // 这一判与上面那次 op 判定是两件事：那个判"这个动作给不给他用"，这个判"这是不是你能碰的数据"。
         String owner = ownerDeny(h);
         if (owner != null) return owner;
-        // 资源判定（ACL）：写触发词表 = 写通用 kv 表（C:W；C 类对非主人只有 R（RWX 只有 SYSTEM 有）⇒ 非主人写一律被位拦下）
-        String deny = h.needDb(LIB_KV, 'W');
-        if (deny != null) return deny;
 
         List<String> words = split(a.str("word"));
         if (words.isEmpty()) return a.missing("word");
@@ -162,7 +171,7 @@ public class TriggerSkill implements Skill, Hooked {
     // ---------------------------------------------------------------- list
 
     private static String list(Args a, Host h, Cfg c) {
-        String deny = h.needDb(LIB_KV, 'R');           // 列触发词表 = 读通用 kv 表（C:R，默认位就够读）
+        String deny = h.need("trigger.list");          // 列触发词表 = 这个动作自己的 op
         if (deny != null) return deny;
         List<JsonObject> rows = all(h.store());
         if (rows.isEmpty()) return c.t("列表空");
@@ -194,12 +203,12 @@ public class TriggerSkill implements Skill, Hooked {
     // ---------------------------------------------------------------- remove
 
     private static String remove(Args a, Host h, Cfg c) {
-        // 归属硬判（ACL 新口径）：删触发词同 set —— 改的是全局共享的表，非主人一律拒。
+        // 技能管控表：这个动作自己的 op（与 set 各判一次，互不牵连）。
+        String deny = h.need("trigger.remove");
+        if (deny != null) return deny;
+        // 归属硬判（技能管控表之外的那一道）：删触发词同 set —— 改的是全局共享的表，非主人一律拒。
         String owner = ownerDeny(h);
         if (owner != null) return owner;
-        // 资源判定（ACL）：删触发词 = 写通用 kv 表（C:W）
-        String deny = h.needDb(LIB_KV, 'W');
-        if (deny != null) return deny;
         Store st = h.store();
         if (a.b("all", false)) {
             int n = 0;
@@ -280,12 +289,12 @@ public class TriggerSkill implements Skill, Hooked {
             }
 
             long now = System.currentTimeMillis();
-            // 自主钩子（on_message）：主体是 SYSTEM（C:RWX）→ 她自己的触发词接话要读写 kv，
-            // 这一判只兜"库不可写"；C 类对非主人只有 R（RWX 只有 SYSTEM 有），普通用户命中时写位会拦下他 ——
+            // 自主钩子（on_message）：判定主体是 SYSTEM（她自己的行为）⇒ h.need 恒放行；照旧写这一句，
+            // 读代码的人不需要分辨这一轮是谁触发的。这一判只兜"这个技能没被授权"；
             // 真正决定"谁能写词表"的是上面的归属硬判（set / remove），钩子路径不写词表结构、只回写 uses/冷却。
-            String denyKv = h.needDb(LIB_KV, 'W');
+            String denyKv = h.need("trigger");
             if (denyKv != null) {
-                log(h, "触发词命中但写不了 kv：" + denyKv);
+                log(h, "触发词命中但没被授权用本技能：" + denyKv);
                 return;
             }
             String ck = COOL + Str.nz(h.session()) + ":" + Str.lower(word);

@@ -74,16 +74,17 @@ import sair.v4.skill.Host;
  * （OneBot v11；{@code data} 数组每项取 {@code user_id}/{@code nickname}/{@code card}/{@code role}）。
  * 缓存在<b>插件自己的内存</b>里（{@code ConcurrentHashMap}，按群、按 TTL），<b>不落盘、不写库、不建表</b>。</p>
  *
- * <p><b>权限闸门（重要，三条都要能容忍）</b>：{@code Host.napcat()} 是<b>带闸门</b>的接口
+ * <p><b>NapCat 闸门（重要，两种结果都要能容忍）</b>：{@code Host.napcat()} 是<b>带闸门</b>的接口
  * （{@code Boot.java} 装配第⑧步：{@code guardedApi} 的 {@code Guard} 按 {@code Ctx.caller()} 复核
- * 这个平台动作的 <b>ACL E 位</b>（{@code Res.platform(动作)} 的 {@code X} 位）；E 类默认分配
- * {@code MASTER RWX} / {@code SYSTEM RWX} / {@code ALLUSER 无}）。
+ * 这个平台动作自己的 op（{@code napcat.<动作名>}）：技能管控表里没给这个身份授权（空 / Ban）就拒，
+ * 主人与她本人（{@code SYSTEM}）恒全权）。
  * 闸门只看<b>调用线程的 {@code Ctx} 绑定</b>：没有绑定主体 = 她自己的自主行为（{@code SYSTEM}）→ 放行；
  * 池满退回调用线程（caller-runs）时才按调用者裁决。
  * 所以这里<b>两种结果都可能出现</b>：数据，或 {@code [权限阻断] …} 文本
  * （{@code Api.call} 把拒绝原文放在 {@code error} 字段里）。
  * 本插件一律按"拿不到"处理（{@link #parse} 见到 {@code error} 字段就返回 null → 这一段不出），
- * <b>不抛异常、不重试轰炸</b>（失败也进缓存，见「失败缓存秒」）。</p>
+ * <b>不抛异常、不重试轰炸</b>（失败也进缓存，见「失败缓存秒」）。
+ * 本插件是纯行为插件（没有工具、只有扩展点），跑在 SYSTEM 主体上，所以它<b>自己没有 op 判定</b>。</p>
  *
  * <h3>文案与阈值</h3>
  * <p>全在本插件目录的 {@code prompt.md}（{@code 键: 值}）：标题 / 说明 / 行模板 / 全局标题 / 全局行模板 /
@@ -422,7 +423,7 @@ public class GroupMemberMapProvider implements ContextProvider {
      * OneBot 响应 → 成员表。
      *
      * <p><b>容忍权限阻断</b>：{@code Api.call} 的失败口径是"补一个 {@code error} 字段"
-     * （{@code {"error":"缺 X 位 —— [权限阻断] 需要 get_group_member_list 的 X 位（默认分配 NONE，当前有效位 NONE）"}}、
+     * （{@code {"error":"[权限阻断] 「napcat.get_group_member_list」没有授权给你（未授权 = 不可用）"}}、
      * {@code {"error":"Napcat 没有连接"}}、{@code status=failed}…）。见到 {@code error} 就返回 null =
      * "拿不到"，<b>不是异常、也不再试</b>。</p>
      */

@@ -19,20 +19,18 @@ import sair.v4.skill.Skill;
 /**
  * 文件（工具 {@code file}）：read / list / find / download / write。
  *
- * <p><b>能碰什么：唯一权威是 ACL，技能不给自己设一道更低的上限</b>。相对路径按 {@code h.conf().root()}
- * 解析（那是"相对于谁"的语义，保留），绝对路径原样采用 —— 主人要读数据根以外的 A 类文件
- * （例如 {@code D:\Share\**\x.mp3}）时，挡他的只有账本，不是技能；只有把这道自设的锁拿掉，账本给 A 类资源
- * 写的例外（{@code A["User…","D:/share","R"]}）才真有工具用得上，而不是"死授权"。
- * 能不能碰，由调用点的 {@code h.needPath(f, 'R'/'W')} 判：<b>被拒时把 ACL 的拒绝原文原样返回给调用方</b>
- * （形如 {@code 缺 R 位 —— [权限阻断] …}）—— 调用方要靠这句话决定要不要升级到更重的工具，
- * 技能另造一句拒绝就会把它带偏。口径：从最低权限起、不行再逐步升级（MASTER 到 MASTER、SYSTEM 到 SYSTEM、
- * ALLUSER 的上限由例外清单决定）。</p>
+ * <p><b>能碰什么：唯一权威是技能管控表（op），技能不给自己设一道更低的上限</b>。相对路径按 {@code h.conf().root()}
+ * 解析（那是"相对于谁"的语义，保留），绝对路径原样采用 —— 主人要读数据根以外的文件
+ * （例如 {@code D:\Share\**\x.mp3}）时，挡他的只有授权，不是技能。
+ * 每个动作分支开头判自己那个 op（{@code h.need("file.read")} 等）：<b>被拒时把拒绝原文原样返回给调用方</b>
+ * （形如 {@code [权限阻断] …}）—— 调用方要靠这句话决定要不要换别的工具，技能另造一句拒绝就会把它带偏。
+ * 授权看技能管控表 {@code data/skillctl.json}：{@code Run} 放行才动手、{@code Ban}/空 = 不可用；
+ * 主人（{@code MASTER}）与她本人（{@code SYSTEM}）恒全权，不受表影响。</p>
  *
  * <p><b>结构性防护仍在（这些不是权限，别删）</b>：① {@code getCanonicalFile()} 抵掉 {@code ..} 与符号链接；
  * ② 再用 {@code toRealPath()} 把<b>最深一层已存在的祖先</b>解成真实位置 —— Windows 上
  * {@code getCanonicalPath()} 不解析目录联接（junction），只做 ① 会让 {@code files/联接/secret.txt} 静默指到
  * 数据根外面；② 让 junction 与符号链接一起露出来，而且对"还不存在的新文件"（write / download 的落点）同样成立。
- * 两者留在 {@link #resolve} 里是让 ACL 判<b>真身</b>：别名（软链 / junction）换不来资源类别。
  * {@code download} 的落点固定在数据根的 {@code files/}（{@code h.conf().filesDir()}）—— 那是这个 op 的语义，
  * 见 {@link #resolveIn}，两道前缀校验在那儿照旧生效；{@code find} / {@code list} 的扫描条数与深度上限也照旧。</p>
  *
@@ -44,6 +42,18 @@ public class FileSkill implements Skill {
     private static final String TOOL = "file";
     private static final String NAME = "文件";
     private static final String OPS = "read / list / find / download / write";
+
+    /**
+     * 声明本技能的五个 op（技能管控表就是按这些名字放行或封禁的）。
+     */
+    @Override
+    public void declareOps(sair.v4.auth.OpList ops) {
+        ops.add("file", "read", "读文本文件");
+        ops.add("file", "list", "列目录");
+        ops.add("file", "find", "按关键词找文件");
+        ops.add("file", "download", "下载 http/https 到 files/");
+        ops.add("file", "write", "写文件");
+    }
 
     @Override
     public Object call(Args a, Host h) {
@@ -69,17 +79,13 @@ public class FileSkill implements Skill {
     // ---------------------------------------------------------------- read
 
     private static String read(Args a, Host h, Cfg c, File root) {
+        // 这个动作分支的 op 判定（技能管控表：op 放行才动手）
+        String deny = h.need("file.read");
+        if (deny != null) return deny;
         String p = a.str("path");
         if (Str.blank(p)) return a.missing("path");
         File f = resolve(root, p);
         if (f == null) return c.t("路径非法", "path", Str.cut(Str.nz(p), 160));
-        // 资源判定（ACL）：能碰什么由账本判，技能不设"必须在数据根以内"这种上限；
-        // 判的是这段路径**实际落在哪一类**：数据根的 files\ 目录 = C 类（她自己的运行时脚手架，
-        // 见 Res.dataDir）且带"files 树"标记 ⇒ files\ 树属 C、无专有位 ⇒ C:非主人只读（R）；
-        // files\ 以外、SFW 根以内 = B 类（ALLUSER 在 B 类无位 = ∅）；
-        // 数据根以外的本机文件 = A 类（ALLUSER 默认一位都不给，要开只能靠例外条目；主人恒全权）。
-        String deny = h == null ? null : h.needPath(f, 'R');
-        if (deny != null) return deny;
         if (!f.exists()) return c.t("不存在", "path", rel(root, f));
         if (f.isDirectory()) return c.t("是目录", "path", rel(root, f));
         if (!f.isFile()) return c.t("不是普通文件", "path", rel(root, f));
@@ -142,11 +148,12 @@ public class FileSkill implements Skill {
     // ---------------------------------------------------------------- list
 
     private static String list(Args a, Host h, Cfg c, File root) {
+        // 这个动作分支的 op 判定（技能管控表：op 放行才动手）
+        String deny = h.need("file.list");
+        if (deny != null) return deny;
         String p = a.str("path");
         File f = resolve(root, Str.blank(p) ? "." : p);
         if (f == null) return c.t("路径非法", "path", Str.cut(Str.nz(p), 160));
-        String deny = h == null ? null : h.needPath(f, 'R');    // 列目录 = 读这个目录（能不能列全由 ACL 判：files\ 树属 C、无专有位 ⇒ C:非主人只读（R）；别处 B:非主人默认无位；数据根外 A:非主人默认无位）
-        if (deny != null) return deny;
         if (!f.exists()) return c.t("路径不存在", "path", rel(root, f));
         if (f.isFile()) return c.t("是文件不是目录", "path", rel(root, f));
 
@@ -188,15 +195,14 @@ public class FileSkill implements Skill {
     // ---------------------------------------------------------------- find
 
     private static String find(Args a, Host h, Cfg c, File root) {
+        // 这个动作分支的 op 判定（技能管控表：op 放行才动手）
+        String deny = h.need("file.find");
+        if (deny != null) return deny;
         String kw = Str.trim(a.str("keyword"));
         if (kw.isEmpty()) return a.missing("keyword");
         String p = a.str("path");
         File base = resolve(root, Str.blank(p) ? "." : p);
         if (base == null) return c.t("路径非法", "path", Str.cut(Str.nz(p), 160));
-        // 递归扫这一棵子树并按内容匹配 = 拿这棵子树下的文件当语料 → 判这棵子树的读位（唯一权威是 ACL：
-        // 数据根内 files\ 属 C、无专有位 ⇒ 非主人只读（R）也读得到；别处 B:非主人无位；数据根外 A 类默认无位）
-        String deny = h == null ? null : h.needPath(base, 'R');
-        if (deny != null) return deny;
         if (!base.exists()) return c.t("路径不存在", "path", rel(root, base));
         if (base.isFile()) base = base.getParentFile() == null ? base : base.getParentFile();
 
@@ -250,11 +256,9 @@ public class FileSkill implements Skill {
     // ---------------------------------------------------------------- download
 
     private static String download(Args a, Host h, Cfg c, File root) {
-        // 出网 = 执行一把工具 → 判这个工具的 X 位（工具属 T 类，只判入口）。
-        // 这里是**T 类入口**（`Res.tool(...)`，不是 files 树）⇒ ALLUSER 默认 T=无 ⇒ 非主人一把工具都用不了
-        // （要特例放行；不是门槛，只是可被账本例外收回的位判定）。
-        String denyTool = h.need(sair.v4.auth.Res.tool("file.download"), 'X');
-        if (denyTool != null) return denyTool;
+        // 这个动作分支的 op 判定（技能管控表：op 放行才动手）—— 出网下载是这一个 op 的事
+        String deny = h.need("file.download");
+        if (deny != null) return deny;
 
         String url = Str.trim(a.str("url"));
         if (url.isEmpty()) return a.missing("url");
@@ -273,11 +277,7 @@ public class FileSkill implements Skill {
         if (wanted.isEmpty()) wanted = nameOf(url, c);
         File dst = resolveIn(base, wanted);
         if (dst == null) return c.t("下载越界", "path", Str.cut(Str.nz(wanted), 160));
-        // 落点固定在数据根的 files\ 目录 = C 类（她自己的运行时脚手架，D22）⇒ files\ 树属 C、无专有位
-        // ⇒ 非主人只读（R），**非主人写不进**。
-        // 上面那句"越界"是这个 op 的**结构性**语义（落点必须在 files\ 里），不是权限；能不能写由 ACL 判：
-        String deny = h.needPath(dst, 'W');
-        if (deny != null) return deny;
+        // 这是个**结构性**约束（落点必须在 files\ 里），不是权限；能不能下载已由上面的 op 判定过了。
 
         Fs.mkdirs(base);
         log(h, c.t("下载前", "url", Str.cut(url, 200), "path", rel(root, dst), "limit", limit));
@@ -304,6 +304,9 @@ public class FileSkill implements Skill {
     // ---------------------------------------------------------------- write
 
     private static String write(Args a, Host h, Cfg c, File root) {
+        // 这个动作分支的 op 判定（技能管控表：op 放行才动手）
+        String deny = h.need("file.write");
+        if (deny != null) return deny;
         String p = a.str("path");
         if (Str.blank(p)) return a.missing("path");
         if (!a.has("content")) return a.missing("content");
@@ -316,15 +319,8 @@ public class FileSkill implements Skill {
 
         File f = resolve(root, p);
         if (f == null) return c.t("路径非法", "path", Str.cut(Str.nz(p), 160));
-        // 能写哪儿由 ACL 判（技能不设"必须落在数据根以内"的上限），判的是这段路径**实际落在哪一类**：
-        // ① 落在数据根的 files\ 目录 = C 类（她自己的运行时脚手架）⇒ files\ 树属 C、无专有位 ⇒
-        //    非主人只读（R），**非主人写不进**；
-        // ② 数据根里的技能目录（skills\**，含技能源码与 prompt.md）是 B 类（对非主人无位 = ∅），而
-        //    prompts\**（第二层）与 perms.json 这类账本（第一层）连例外都不开 ⇒ 非主人照样写不进；
-        // ③ 数据根以外 = A 类（ALLUSER 默认一位都不给）⇒ 主人照常写得进、非主人要靠例外清单 ——
-        //    这正是"工具不自己设一道比 ACL 更低的上限"的后果。
-        String deny = h.needPath(f, 'W');
-        if (deny != null) return deny;
+        // 能写哪儿由技能管控表判（技能不设"必须落在数据根以内"的上限）：见分支开头的 op 判定 ——
+        // op 写的是 {@code file.write}（不区分路径落在哪里），放行就是能写。
         if (f.exists() && f.isDirectory()) return c.t("写入是目录", "path", rel(root, f));
 
         long old = f.isFile() ? f.length() : 0L;
@@ -364,14 +360,14 @@ public class FileSkill implements Skill {
     /**
      * 解析路径：<b>相对路径按 {@code base} 解析</b>（"相对于谁"的语义），<b>绝对路径原样采用</b>。
      *
-     * <p><b>这里不做"必须在某个根以内"的限定</b> —— 能不能碰这个文件由 ACL 判（调用点的
-     * {@code h.needPath(f, 'R'/'W')}），工具不自己设一道比 ACL 更低的上限：主人要读数据根以外的
-     * A 类文件（例如 {@code D:\Share\**\x.mp3}）时，挡他的只能是账本，不是技能；也因此账本给 A 类
-     * 写的例外条目才真有工具用得上。落点固定在 {@code files/} 的 {@code download} 另走 {@link #resolveIn}。</p>
+     * <p><b>这里不做"必须在某个根以内"的限定</b> —— 能不能碰这个文件由 op 判（动作分支开头的那一句
+     * {@code h.need("file.read")} 等），工具不自己设一道比授权更低的上限：主人要读数据根以外的
+     * 文件（例如 {@code D:\Share\**\x.mp3}）时，挡他的只能是管控表，不是技能。
+     * 落点固定在 {@code files/} 的 {@code download} 另走 {@link #resolveIn}。</p>
      *
      * <p><b>两道结构性解析照旧（不是权限）</b>：① {@code getCanonicalFile()} 把 {@code ..} 与符号链接抵掉；
-     * ② {@code toRealPath()} 把 Windows 目录联接（junction）也解成真实位置 —— 于是 ACL 判的是<b>真身</b>：
-     * 别名换不来资源类别（{@code files/联接/secret.txt} 不会被当成 {@code files/} 里的 C 类）。
+     * ② {@code toRealPath()} 把 Windows 目录联接（junction）也解成真实位置 —— 别名（软链 / junction）
+     * 骗不过这两道。
      * 写法系统不接受（无法规范化）时返回 null：调用方把这句当**输入不合法**明确报出，不猜、也不当权限拒绝。</p>
      */
     private static File resolve(File base, String path) {
@@ -393,7 +389,7 @@ public class FileSkill implements Skill {
      * 且 <b>① 规范化路径</b>与 <b>② 真实位置</b>都必须仍落在 {@code base} 以内，否则返回 null。
      *
      * <p>这不是权限，是这个 op 的<b>语义</b>：下载的落点固定是数据根的 {@code files/}（回绝文案见 prompt.md
-     * 的「下载越界」）；能不能往 {@code files/} 写，仍由调用点的 {@code needPath(dst, 'W')} 判。
+     * 的「下载越界」）；能不能下载已由分支开头的 {@code h.need("file.download")} 判过。
      * 两道前缀校验同时留着，才能挡住 {@code ../} 与"指向根外的 junction"两种逃逸。</p>
      */
     private static File resolveIn(File base, String path) {
@@ -415,7 +411,7 @@ public class FileSkill implements Skill {
     /**
      * 真实位置：把"最深一层已存在的祖先"用 {@code toRealPath()} 解开（junction / 符号链接都在这里露出来），
      * 再把还不存在的尾巴拼回去。失败返回 null —— 调用方对 {@link #resolve} 退回规范化路径（不因此拒绝），
-     * 对 {@link #resolveIn} 才算"落点不可信"。真身化只为让 ACL 判真身，不是权限判定本身。
+     * 对 {@link #resolveIn} 才算"落点不可信"。真身化只是结构性防护，不是权限判定本身。
      */
     private static File real(File f) {
         try {

@@ -36,17 +36,18 @@ import sair.v4.store.Store;
  * <b>写库</b>（重复的只更新 importance，不重复的才新增）。</p>
  *
  * <p>只用 {@link Host} 的能力面：{@code h.store()} 读写六库、{@code h.ai()} 打模型、{@code h.out()} 打日志；
- * 不自己建表、不自己写 SQL、不碰基板代码。模型失败（{@code Res.error}，例如没配 apiKey）不抛异常、
+ * 不自己建表、不自己写 SQL、不碰基板代码。模型失败（模型回包带 {@code error}，例如没配 apiKey）不抛异常、
  * 不写脏数据，只把这一轮的状态记进 kv，下次 tick 再试。</p>
  *
- * <h3>权限：位判定 + 归属硬判（ACL 之后）</h3>
- * <p>{@code memory} 是 C 类资源，C 类对非主人只有 {@code R} ⇒ {@code h.needDb(c.lib,'W')}
- * 把非主人写一律拦下。而"写的是谁的数据"这条路仍靠<b>归属硬判</b>分人
+ * <h3>权限：op 判定 + 归属硬判（本轮新口径）</h3>
+ * <p>每个动作各判自己那个 op（技能管控表 {@code skillctl.json}）：{@code impression.get} /
+ * {@code impression.list} / {@code impression.refresh} / {@code impression.run} —— 表里没放行 = 未授权 = 不可用；
+ * {@code MASTER} 与她本人 {@code SYSTEM} 恒全权。而"写的是谁的数据"这条路仍靠<b>归属硬判</b>分人
  * （拒绝文案以 {@code [权限阻断]} 开头，不是 prompt.md 文案）：{@link #run}
  * 是按候选池给<b>别人</b>写 {@code scope_id} 的批量入口，非主人（{@code ALLUSER}）一律拒；
  * {@code MASTER} 与她自己的自主行为（{@code SYSTEM}，{@code on_timer} 那条路）照常。</p>
- * <p>{@link #get} / {@link #list} 是读（读印象库不设限），但它们<b>强制取自己 qq</b>，
- * {@link #refresh} 同理（非主人不给定向到别人）：定向别人这件事本身由归属判定管，不由权限位管。</p>
+ * <p>{@link #get} / {@link #list} 是读，但它们<b>强制取自己 qq</b>，
+ * {@link #refresh} 同理（非主人不给定向到别人）：定向别人这件事本身由归属判定管，不由 op 判定管。</p>
  *
  * <h3>★ 她自己的标记行（P1-selfsee）：读 grouplog/dialog 的每个读点先过一道判据</h3>
  * <p>基板 P0-1 之后 {@code grouplog}/{@code dialog} 里会多出她<b>自己发出去</b>的那一行「标记行」
@@ -216,6 +217,19 @@ public class ImpressionSkill implements Skill, Hooked {
         }
     }
 
+    /**
+     * 声明本技能的四个 op（技能管控表按这些名字放行 / 封禁）：
+     * {@code impression.get}（读某人的印象）、{@code impression.list}（列出有印象的人）、
+     * {@code impression.refresh}（立刻蒸一个人）、{@code impression.run}（立刻批量跑一轮）。
+     */
+    @Override
+    public void declareOps(sair.v4.auth.OpList ops) {
+        ops.add("impression", "get", "读某人的长期印象");
+        ops.add("impression", "list", "列出已有印象的人");
+        ops.add("impression", "refresh", "立刻蒸馏一个人");
+        ops.add("impression", "run", "立刻批量跑一轮蒸馏");
+    }
+
     // ================================================================ 钩子入口
 
     @Override
@@ -259,7 +273,8 @@ public class ImpressionSkill implements Skill, Hooked {
     /** {@code get}：读某个人的印象条目（缺省 = 当前调用者）。 */
     private static String get(Args a, Host h) {
         Cfg c = load(h);
-        String deny = h.needDb(c.lib, 'R');            // 读印象库（C:R）
+        // op 判定（动作分支开头）：读印象 = impression.get
+        String deny = h.need("impression.get");
         if (deny != null) return deny;
         long qq = a.l("qq", 0L);
         Caller me = h.caller();
@@ -295,7 +310,8 @@ public class ImpressionSkill implements Skill, Hooked {
     /** {@code list}：列出已有印象的人（去重 + 条数）。 */
     private static String list(Args a, Host h) {
         Cfg c = load(h);
-        String deny = h.needDb(c.lib, 'R');            // 读印象库（C:R）
+        // op 判定（动作分支开头）：列印象 = impression.list
+        String deny = h.need("impression.list");
         if (deny != null) return deny;
         Caller me = h.caller();
         boolean master = isMaster(me);
@@ -338,10 +354,10 @@ public class ImpressionSkill implements Skill, Hooked {
     /** {@code refresh}：立刻对一个人做一次蒸馏。 */
     private static String refresh(Args a, Host h) {
         Cfg c = load(h);
-        // 这是她自己的主动行为，不是"碰某个库"：判的是这个工具的 X 位（工具属 T 类，只判入口）。
-        // 定向到别人靠下面那句"非主人强制取自己 qq"（归属硬判），不靠权限位。
-        String denyRun = h.need(sair.v4.auth.Res.tool("impression"), 'X');
-        if (denyRun != null) return denyRun;
+        // op 判定（动作分支开头）：立刻蒸一个人 = impression.refresh（她自己的主动行为也是走这一条 op）。
+        // 定向到别人靠下面那句"非主人强制取自己 qq"（归属硬判），不靠 op。
+        String deny = h.need("impression.refresh");
+        if (deny != null) return deny;
         Caller me = h.caller();
         long qq = a.l("qq", 0L);
         if (qq <= 0L) qq = me == null ? 0L : me.qq();
@@ -365,14 +381,14 @@ public class ImpressionSkill implements Skill, Hooked {
     /** {@code run}：立刻对"轮转到的下一批人"批量跑一轮（受 每轮人数 约束，仅主人与她本人）。 */
     private static String run(Args a, Host h) {
         Cfg c = load(h);
+        // op 判定（动作分支开头）：批量跑一轮 = impression.run（她自己的定时维护走 on_timer，那条路是 SYSTEM）。
+        String deny = h.need("impression.run");
+        if (deny != null) return deny;
         Caller me = h.caller();
-        // 先判归属，再判位：本轮是"她自己的维护"（按 candidate 池给**别人**写印象），
-        // 归属硬判在前 —— 被拒时一行模型都不打、库一个字节都不动。
+        // 再判归属：本轮是"她自己的维护"（按 candidate 池给**别人**写印象），
+        // 归属硬判也拦得住 —— 被拒时一行模型都不打、库一个字节都不动。
         String ownerDeny = noDistillDeny(h);
         if (ownerDeny != null) return ownerDeny;
-        // 同一把工具的 X 位（工具属 T 类，只判入口）：归属过了之后再按位兜一次。
-        String deny = h.need(sair.v4.auth.Res.tool("impression"), 'X');
-        if (deny != null) return deny;
         if (!c.enabled) return msg(c, "文案-未启用", "disabled");
         Gate g = gate(h, c);
         if (g.wait > 0L) return msg(c, "文案-跳过节流", "skip wait={wait}ms", "{wait}", String.valueOf(g.wait));
@@ -390,12 +406,9 @@ public class ImpressionSkill implements Skill, Hooked {
 
     /** 对一批人各跑一次蒸馏，返回可读结果（并按口径落 kv：last / done / status）。 */
     private static String round(Host h, Cfg c, List<Who> people, String op, Pick p) {
-        // 这一轮要写印象库（C:W）+ 读 dialog/grouplog。注意 C 类对非主人只有 R ⇒ 这道 W 位判定
-        // 把非主人写一律拦下；而"分人"仍靠**归属硬判**：
-        // 定时钩子路径主体是 SYSTEM（她自己的维护，在 {@link #run}/{@link #refresh} 里已判过归属）；
-        // 工具路径上 ALLUSER 一律在 {@link #run} 就被拒，refresh 则强制只能蒸自己。
-        String denyWrite = h.needDb(c.lib, 'W');
-        if (denyWrite != null) return denyWrite;
+        // 权限：写印象库这一步不再单独判 —— 三个入口各自在动作分支开头判过自己的 op
+        // （工具路：refresh / run；钩子路：on_timer 主体是 SYSTEM，恒放行）。"分人"仍靠**归属硬判**：
+        // run 上 ALLUSER 一律被 noDistillDeny 拒，refresh 则强制只能蒸自己。
         long now = System.currentTimeMillis();
         JsonArray detail = new JsonArray();
         StringBuilder sb = new StringBuilder();
@@ -1191,9 +1204,8 @@ public class ImpressionSkill implements Skill, Hooked {
      * 按候选池给<b>别人</b>的 {@code scope_id} 写 {@code memory} 行，所以非主人（{@code ALLUSER}）
      * 一律拒；{@code MASTER} 与她自己的自主行为（{@code SYSTEM}，即 {@code on_timer} 那条路）照常。
      *
-     * <p><b>为什么还要归属硬判</b>：{@code memory} 是 C 类资源，C 类对非主人只有 {@code R}
-     * ⇒ {@code h.needDb(c.lib,'W')}（{@link #round}）和工具 X 位（工具属 T 类，只判入口）都把非主人写一律拦下；
-     * 而"写的是不是别人的数据"仍由这道归属硬判裁定（读自己那一类仍靠它）。
+     * <p><b>为什么还要归属硬判</b>：op 判定（{@code impression.run}）只回答"能不能用这个动作"；
+     * 而"写的是不是别人的数据"仍由这道归属硬判裁定（读自己那一类也靠它）。
      * 读自己用 {@code get}/{@code list}、蒸自己用 {@code refresh}（那里强制取自己 qq），都不受影响。</p>
      *
      * @return 放行返回 {@code null}；拒返回可直接回给模型的 {@code [权限阻断] …} 原文
@@ -1204,7 +1216,7 @@ public class ImpressionSkill implements Skill, Hooked {
     }
 
     /**
-     * 受限主体判定（ACL 之后的新口径）：受限的只有 {@code ALLUSER}（普通用户）。
+     * 受限主体判定（本轮新口径）：受限的只有 {@code ALLUSER}（普通用户）。
      * <p>{@code MASTER} / {@code SYSTEM} 照常放行；身份取不到时按受限处理（fail-closed）。</p>
      */
     private static boolean restricted(Host h) {

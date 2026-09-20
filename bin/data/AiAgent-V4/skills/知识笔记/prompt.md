@@ -42,4 +42,4 @@
 #   第二道是 V3 util/TextFingerprint 的等价物：同主题的"略有差异标题"不该反复堆成新条目。
 #   判定只用标题、不用正文（正文往往是模板化的搜索结果堆，用它会误并"同主题不同问题"）。
 # search：h.store().search("note", query, limit)（FTS5 trigram，无命中回退 LIKE）。
-# 归属硬判（不是权限位）：note 是共享知识库、行里没有归属列 ⇒ 非主人写/改/删一律拒，读口仍开放（NoteSkill.noteWriteGuard）。
+# 归属硬判（不是 op 授权）：note 是共享知识库、行里没有归属列 ⇒ 非主人写/改/删一律拒，读的动作没有归属这一层（NoteSkill.noteWriteGuard）。

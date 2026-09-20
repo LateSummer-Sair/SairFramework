@@ -39,7 +39,7 @@ import sair.v4.store.Store;
  * 换个群还取得到；只在某个群成立的事落 {@code group}，不会跟着人跨群跑。判断口径写在
  * {@code prompt.md} 与本技能 md 的工具说明里。</p>
  *
- * <p><b>归属口径（ACL 之后的新口径 —— 与权限位无关）</b>：{@code MASTER}（主人）与 {@code SYSTEM}
+ * <p><b>归属口径（技能管控表只管控技能 —— 与"这个库谁能碰"无关）</b>：{@code MASTER}（主人）与 {@code SYSTEM}
  * （她自己的自主行为）照常全放行；受限的只有 {@code ALLUSER}（普通用户），而且判的是<b>代码里的显式归属</b>：
  * <ul>
  *   <li>写：只能写 {@code scope=user && scope_id==自己 QQ}，或 {@code scope=group && scope_id==自己所在群}；
@@ -47,8 +47,9 @@ import sair.v4.store.Store;
  *   <li>读：{@code 本人 / 本群 / global}（与 {@link #visible} 同口径），别人的 {@code user}、别群的 {@code group} 拒；</li>
  *   <li>删：{@code master || 自己}（自己的 {@code user} 记忆）。</li>
  * </ul>
- * <p><b>为什么还要归属硬判</b>：{@code memory} 是 C 类资源，C 类对非主人只有 {@code R}（{@code RWX} 只有 {@code SYSTEM} 有）
- * ⇒ {@code h.needDb("memory",'W')} 把非主人写一律拦下；而"这是不是你的数据"仍靠这里的显式归属比较（归属硬判仍在，读口与非本人行仍靠它）。</p>
+ * <p><b>两道判定各管各的</b>：每个动作分支开头先按技能管控表判自己的 op
+ * （{@code memory.remember} / {@code memory.recall} / {@code memory.search} / {@code memory.forget}，
+ * 空 = 未授权 = 不可用）；判过之后的"这是不是你的数据"仍靠这里的显式归属比较（归属硬判仍在，读口与非本人行仍靠它）。</p>
  */
 public class MemorySkill implements Skill {
 
@@ -62,16 +63,26 @@ public class MemorySkill implements Skill {
     private static final String S_GLOBAL = "global";
     /** 标签的结构性兜底（真正生效的值在 prompt.md 的「记忆标签」，默认是「记忆」）。 */
     private static final String TAG_DEF = "memory";
-    /** 删「别人的 / 全局的」记忆时用的 C 类内存资源名（历史遗留的权限位判定，见 {@link #checkForgetOther}）。 */
-    private static final String RES_FORGET_OTHER = "memory.forget";
-    /** 写「global」记忆时用的 C 类内存资源名（与整库写分开，免得放宽整库写顺带放开全局写）。 */
-    private static final String RES_WRITE_GLOBAL = "memory.remember.global";
 
     /**
      * 归属阻断的固定前缀。<b>必须由代码保证</b>（探针按这个前缀断言），不能走 prompt.md ——
      * 否则一句配置改动就能把"非主人的数据守卫"改没。
      */
     private static final String DENY = "[权限阻断] ";
+
+    // ================================================================ op 声明（装载期）
+
+    /**
+     * 本技能全部 op：一个动作一条（技能管控表按这些名字放行或封禁，
+     * 所以"允许他记一笔"与"允许他删别人的"能在表里分开写）。
+     */
+    @Override
+    public void declareOps(sair.v4.auth.OpList ops) {
+        ops.add("memory", "remember", "记一件事");
+        ops.add("memory", "recall", "回想（按作用域取回）");
+        ops.add("memory", "search", "全文检索记忆");
+        ops.add("memory", "forget", "忘掉一条");
+    }
 
     // ================================================================ 库声明（装载期）
 
@@ -141,8 +152,11 @@ public class MemorySkill implements Skill {
         return prev == null ? fresh : prev;
     }
 
-    /** 记一条记忆：先查重，再落库；非主人只能记自己的 user / 自己所在群的 group（见 {@link #guardWriteScope}）。 */
+    /** 记一条记忆：先判 op，再查重，最后落库；非主人只能记自己的 user / 自己所在群的 group（见 {@link #guardWriteScope}）。 */
     private static String remember(Args a, Host h, Store s, Cfg c) {
+        // 技能管控表：这个动作自己的 op —— 判不过就把拒绝原文原样回给模型，一个字节都不写。
+        String deny = h == null ? null : h.need("memory.remember");
+        if (deny != null) return deny;
         // 查重与写库之间不能有缝：按目标作用域串行（scope/scope_id 现算，算不出就退化成整库一把锁）
         String sc = scopeOf(a, "");
         if (!Str.has(sc) || "?".equals(sc)) sc = "?";
@@ -153,8 +167,6 @@ public class MemorySkill implements Skill {
     }
 
     private static String rememberLocked(Args a, Host h, Store s, Cfg c) {
-        String deny = checkWrite(h);
-        if (deny != null) return deny;
         String content = Str.trim(a.str("content"));
         if (content.isEmpty()) return a.missing("content");
         if (content.length() > atLeast(P(c, "内容长度上限", "1000"), 20, 20000)) {
@@ -178,22 +190,21 @@ public class MemorySkill implements Skill {
         boolean master = master(h);
         String downgraded = "";
         if (S_GLOBAL.equals(scope) && restricted(h)) {
-            // 归属硬判：global 记忆没有归属可依（全体共享的），非主人一律拒 —— 与权限位无关。
+            // 归属硬判：global 记忆没有归属可依（全体共享的），非主人一律拒 —— 与 op 判定无关。
             // 注意：这一条在「越权全局降级为个人」之前 —— 降级是"写成了自己的 user"，不是拒绝。
             return guardWriteScope(h, scope, "");
         }
         if (S_GLOBAL.equals(scope) && !master) {
-            String g = checkGlobalWrite(h);
-            if (g != null) {
-                if (!truthy(P(c, "越权全局降级为个人", "true"))) return g;
-                scope = S_USER;
-                downgraded = msg(c, "文案-降级尾巴", " (downgraded to user:{qq})", "{qq}", String.valueOf(me));
+            // op（memory.remember）已在分支开头判过 —— 这里只剩"越权全局降级为个人"这一条业务口径。
+            if (!truthy(P(c, "越权全局降级为个人", "true"))) {
+                return blocked("非主人不能写 global 作用域的记忆（只能写自己的 user 或自己所在群的 group）。");
             }
+            scope = S_USER;
+            downgraded = msg(c, "文案-降级尾巴", " (downgraded to user:{qq})", "{qq}", String.valueOf(me));
         }
         String id = idOf(a, h, scope);
         if (id == null) return msg(c, "文案-缺作用域号", "scope id required scope={scope}", "{scope}", scope);
-        // 归属硬判：非主人只能写「自己的 user / 自己所在群的 group」（原来这里只是 checkWrite(h)，
-        // 而 C 类对非主人只有 R ⇒ 非主人写一律被位拦下；"写别人的、写别群的"仍由归属硬判裁定）。
+        // 归属硬判：非主人只能写「自己的 user / 自己所在群的 group」；"写别人的、写别群的"由它裁定。
         String scopeDeny = guardWriteScope(h, scope, id);
         if (scopeDeny != null) return scopeDeny;
 
@@ -248,7 +259,8 @@ public class MemorySkill implements Skill {
      * <p><b>给了 scope</b>：只查那一层（与老口径一致），行上一样带来源场合。</p>
      */
     private static String recall(Args a, Host h, Store s, Cfg c) {
-        String deny = checkRead(h);
+        // 技能管控表：这个动作自己的 op（与 search 各判一次，互不牵连）。
+        String deny = h == null ? null : h.need("memory.recall");
         if (deny != null) return deny;
         int limit = a.i("limit", atLeast(P(c, "列表条数", "10"), 1, 200));
         if (limit <= 0) limit = atLeast(P(c, "列表条数", "10"), 1, 200);
@@ -261,7 +273,7 @@ public class MemorySkill implements Skill {
             String id = idOf(a, h, scope);
             if (id == null) return msg(c, "文案-缺作用域号", "scope id required scope={scope}", "{scope}", scope);
             // 归属硬判（样板 = search 分支的 {@link #visible}）：非主人只能读「本人的 user / 本群的 group
-            // / 全体 global」；别人的 user、别群的 group 一律拒（原来这里只是 checkRead(h),恒放行）。
+            // / 全体 global」；别人的 user、别群的 group 一律拒（op 判定在分支开头已过，这一条管的是"哪一条数据"）。
             String scopeDeny = guardReadScope(h, scope, id);
             if (scopeDeny != null) return scopeDeny;
             List<JsonObject> rows = dedupe(fetch(s, c, scope, id, q, limit));
@@ -335,7 +347,8 @@ public class MemorySkill implements Skill {
 
     /** 全文检索：库侧多取，Java 侧按 source + 作用域过滤（非主人只看 全局 / 本群 / 本人）。 */
     private static String search(Args a, Host h, Store s, Cfg c) {
-        String deny = checkRead(h);
+        // 技能管控表：这个动作自己的 op（与 recall 各判一次，互不牵连）。
+        String deny = h == null ? null : h.need("memory.search");
         if (deny != null) return deny;
         String q = Str.trim(a.str("query"));
         if (q.isEmpty()) return a.missing("query");
@@ -363,20 +376,21 @@ public class MemorySkill implements Skill {
 
     /** 删一条：本人自己的 user 记忆，或主人（{@code MASTER}）/她自己的自主行为（{@code SYSTEM}）删任意一条。 */
     private static String forget(Args a, Host h, Store s, Cfg c) {
+        // 技能管控表：这个动作自己的 op（删自己的 / 删别人的都是 forget 这一条 op，
+        // "谁能删哪一条"由下面的归属硬判回答）。
+        String deny = h == null ? null : h.need("memory.forget");
+        if (deny != null) return deny;
         long id = a.l("id", 0L);
         if (id <= 0L) return a.missing("id");
         JsonObject row = s.get(LIB, id);
         if (row == null) return msg(c, "文案-没有这条", "not_found id={id}", "{id}", String.valueOf(id));
         boolean own = S_USER.equals(J.s(row, "scope", ""))
                 && String.valueOf(qq(h)).equals(Str.nz(J.s(row, "scope_id", "")));
-        // 归属硬判：非主人只能删自己的 user 记忆（原来这里只是 checkForgetOther(h) 的权限位判定，
-        // 而 Res.mem("memory.forget") 不是受保护资源；C 类对非主人只有 R ⇒ 非主人写/删一律被位拦下，归属硬判仍在）。
+        // 归属硬判：非主人只能删自己的 user 记忆（别人的 / 全局的只有主人或她本人能删）。
         if (!own && restricted(h)) {
             return blocked("只能删自己的记忆（这一条是 " + Str.nz(J.s(row, "scope", ""))
                     + ":" + Str.nz(J.s(row, "scope_id", "")) + " 的）。");
         }
-        String deny = own ? checkWrite(h) : checkForgetOther(h);
-        if (deny != null) return deny;
         if (!s.delete(LIB, id)) return msg(c, "文案-删除失败", "delete failed id={id}", "{id}", String.valueOf(id));
         return msg(c, "文案-已忘记", "forgotten #{id}",
                 "{id}", String.valueOf(id), "{scope}", Str.nz(J.s(row, "scope", "")),
@@ -568,7 +582,7 @@ public class MemorySkill implements Skill {
     // ================================================================ 作用域 / 权限
 
     /**
-     * 受限主体判定（ACL 之后的新口径）：受限的只有 {@code ALLUSER}（普通用户）。
+     * 受限主体判定（技能管控表之后的新口径）：受限的只有 {@code ALLUSER}（普通用户）。
      *
      * <p>{@code MASTER}（主人）与 {@code SYSTEM}（她自己的自主行为 = 定时/钩子/自主维护）<b>照常放行</b>；
      * 身份取不到时按受限处理（fail-closed）—— "不知道是谁"不能当成"是主人"。</p>
@@ -745,43 +759,6 @@ public class MemorySkill implements Skill {
     }
 
     // ================================================================ 小工具
-
-    /** 读 {@code memory} 库（C 类）：放行返回 null，否则返回可直接回给模型的拒绝原文。 */
-    private static String checkRead(Host h) {
-        if (h == null) return null;
-        return h.needDb(LIB, 'R');
-    }
-
-    /**
-     * 写 {@code memory} 库（C 类）：放行返回 null，否则返回拒绝原文。
-     * <p><b>它不再表达"这是不是你的数据"</b>：C 类对非主人只有 {@code R}，所以这一条把非主人写一律拦下；
-     * 归属仍由 {@link #guardWriteScope} / {@link #guardReadScope} / {@link #restricted} 里的显式比较裁定（归属硬判仍在）。</p>
-     */
-    private static String checkWrite(Host h) {
-        if (h == null) return null;
-        return h.needDb(LIB, 'W');
-    }
-
-    /**
-     * 写 global 记忆：C 类内存资源的写判定（与整库写分开判）。
-     * <p>非主人（{@code ALLUSER}）在 {@link #rememberLocked} 里已被归属硬判直接拒，走不到这里；
-     * 这一条现在是"她自己的自主行为"这一路的位判定。</p>
-     */
-    private static String checkGlobalWrite(Host h) {
-        if (h == null) return null;
-        return h.need(sair.v4.auth.Res.mem(RES_WRITE_GLOBAL), 'W');
-    }
-
-    /**
-     * 删别人的 / 全局的记忆：C 类内存资源的写判定。
-     * <p>{@code Res.mem("memory.forget")} 不是受保护资源（受保护的只有 {@code mem:acl}）
-     * ⇒ ALLUSER 的 C 位只有 {@code R} ⇒ 这一条把非主人写一律拦下；而"删别人的"仍由
-     * {@link #forget} 里的归属硬判（{@code master || 自己}）裁定。</p>
-     */
-    private static String checkForgetOther(Host h) {
-        if (h == null) return null;
-        return h.need(sair.v4.auth.Res.mem(RES_FORGET_OTHER), 'W');
-    }
 
     /** 标签：记忆标签 + 调用方标签（去重）。 */
     private static String tags(Cfg c, String raw) {

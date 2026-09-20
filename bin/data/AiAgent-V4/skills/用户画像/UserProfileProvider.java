@@ -135,8 +135,8 @@ public class UserProfileProvider implements ContextProvider {
             String[] att = new String[1];                                                // 态度（先到者胜）
 
             Store s = store(h);
-            // 资源判定（ACL）：本 provider 只读印象库（C 类）—— 判一次读位（见 denied 的注释：无触发者按 SYSTEM）。
-            if (s != null && denied(h, LIB)) return "";
+            // 权限口径：本 provider 是纯扩展点（md 里没有 tool:、不提供工具）⇒ 没有任何 op 要判 ——
+            // 技能管控表管的是工具（模型能调的那些动作），而扩展点跑在 SYSTEM 主体上（她自己的自主行为，恒放行）。
             List<JsonObject> rows = s == null ? null
                     : list(s, qq, num(c, "印象取样条数", DEF_SAMPLE));
             if (rows != null) {
@@ -297,26 +297,6 @@ public class UserProfileProvider implements ContextProvider {
             return h.store();
         } catch (Throwable t) {
             return null;
-        }
-    }
-
-    /**
-     * 读这个库被拒了吗（ACL：读库 → {@code C} 的 {@code R} 位）。
-     *
-     * <p>主体取当轮绑定的调用者；<b>没有触发者时按 SYSTEM</b>（{@code Caller.systemActor()}）——
-     * 与 {@code ExtRegistry.guarded} 同口径：扩展点没有触发者 = 她自己的自主行为，不是"没人 = 放行"。
-     * 权限面没装配（{@code acl()==null}，例如假宿主）时不拦。</p>
-     */
-    private static boolean denied(Host h, String lib) {
-        if (h == null) return false;
-        try {
-            sair.v4.auth.Auth a = h.acl();
-            if (a == null) return false;
-            sair.v4.auth.Caller who = h.subject();
-            return a.allowRes(who != null ? who : sair.v4.auth.Caller.systemActor(),
-                    sair.v4.auth.Res.db(lib), 'R') != null;
-        } catch (Throwable t) {
-            return false;
         }
     }
 

@@ -160,7 +160,7 @@ public class AirunSkill implements Skill {
 # 最少条数：合并后不足这么多条就跳过本轮（不打模型）。
 # 最低重要度：模型给的 importance 低于这个值直接丢弃。
 # 默认重要度：手工 add 没带 importance 时用的值。
-# 自动提技：默认 off。on 才可能把经验提升成真技能（还要过 提技门槛/提技最低命中 与 B 类写位）。
+# 自动提技：默认 off。on 才可能把经验提升成真技能（还要过 提技门槛/提技最低命中 与 op skill_write.add 的授权）。
 # 提技门槛：importance 门槛；提技最低命中：hits（被重复提到的次数）门槛。
 # 提技技能名模板 / 提技工具名模板：{slug} 由标题净化而来；工具名必须是 ASCII（function calling 的限制）。
 # 提技标记：条目行里"已提技"的尾巴，{skill} 是提升出来的技能名；留空则不打标记。

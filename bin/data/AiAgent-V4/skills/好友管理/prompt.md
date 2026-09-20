@@ -10,6 +10,7 @@
 时间格式: yyyy-MM-dd HH:mm
 # 拉黑动作 / 解除拉黑动作：NapCat 标准动作目录里没有"屏蔽好友"，所以动作名做成配置项。
 # 你的 NapCat 构建支持什么就填什么；填错了动作会失败并原样把 NapCat 的原因返回给模型。
+# 这两个动作也走技能管控表的 op（动作名即 op 名：napcat.<动作名>）—— 表里没放行就发不出去。
 # 注意：本地黑名单（kv 键 block:<qq>）才是权威 —— 入站网关据此不触发 AI（群内也拦得住）。
 # 平台动作只是尽力而为：留空 = 只做本地，不报错。
 拉黑动作: set_friend_block
@@ -55,4 +56,9 @@
 #   {sex} male/female/unknown {age} 年龄 {level} 等级 {group} 群号 {card} 群名片 {role} 群角色
 #   {action} 实际发出的 NapCat 动作名 {times} 点赞次数 {op} op 名 {ops} 可用 op 清单
 #   {sig} 新签名 {act} 平台动作结果 {time} 拉黑时间 {reason} 拉黑原因 {by} 拉黑发起者
-#   {k} 缺的参数名或空的配置键 {err} 失败原因 {deny} 基板权限文案
+#   {k} 缺的参数名或空的配置键 {err} 失败原因 {deny} 技能管控表 / 归属硬判的拒绝原文
+# 权限不在这里配：能不能用由技能管控表（skillctl.json）的 op 决定 —— 每个动作一个 op
+#   （friend.list / friend.info / friend.delete / friend.block / friend.unblock / friend.blocklist /
+#    friend.like / friend.self / friend.poke / friend.rename / friend.signature），
+#   发平台动作前还各判那个 NapCat 动作自己的 op（napcat.<动作名>）；表里空 = 未授权 = 不可用。
+#   拉黑/解除拉黑/黑名单另有一道归属硬判（只有主人与她本人能改 / 能看那份全局共享的名单）。

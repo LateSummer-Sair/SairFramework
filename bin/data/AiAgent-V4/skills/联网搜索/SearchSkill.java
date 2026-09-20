@@ -33,14 +33,17 @@ public class SearchSkill implements Skill {
     private static final Pattern SNIP = Pattern.compile("<p[^>]*>([\\s\\S]*?)</p>");
 
     @Override
+    public void declareOps(sair.v4.auth.OpList ops) {
+        ops.add("search", "", "必应联网搜索");
+    }
+
+    @Override
     public Object call(Args a, Host h) {
-        // 出网搜索 = 执行一把工具（工具的运行时形态是 T 类资源）→ 判这个工具的 X 位。
-        // ALLUSER 默认 T=无 ⇒ 非主人用不了这把工具，要特例放行（可被账本例外放开的位判定）；
-        // 她自己（SYSTEM）与主人同样照常。同族的「天气查询」是同形写法。
-        if (h != null) {
-            String deny = h.need(sair.v4.auth.Res.tool("search"), 'X');
-            if (deny != null) return deny;
-        }
+        // 技能管控表：本技能是单动作工具（op = search）→ 入口判一次自己的 op。
+        // 空（没写这条，或写了没给身份）= 未授权 = 不可用；放行时返回 null，被拒时把拒绝原文原样回给模型。
+        // 她自己（SYSTEM）与主人恒全权，不受管控表影响。
+        String deny = h == null ? null : h.need("search");
+        if (deny != null) return deny;
         String q = Str.trim(a.str("query"));
         if (q.isEmpty()) return a.missing("query");
         int n = a.i("count", 5);

@@ -19,7 +19,12 @@ import sair.v4.skill.Host;
 import sair.v4.store.Store;
 
 /**
- * 「情绪」的<b>档位层</b>：离散 5 态状态机（{@code calm / angry / happy / sad / letdown}）。
+ * 「情绪」的<b>档位层</b>：离散 6 态状态机（{@code calm / angry / happy / sad / letdown / strike}）。
+ * <p>{@code strike}（罢工）是情绪 v2 新增的第 6 档：只能从 {@code angry} 升上来（见
+ * {@link #toStrike}），<b>出口四条</b> —— ① 求饶道歉（既有 sorry 逻辑）② 网格翻页（既有 20 分钟格）
+ * ③ {@code 罢工上限分钟} 到点（{@link #strikeOver}，{@code since} 起算，默认 10 分钟）
+ * ④ {@code 罢工平息条数}（默认连续 3 条不带情绪信号的消息）。③④ 见 {@link #decide} 里那一段。
+ * <b>罢工期间任何带情绪信号的消息只维持、不降级</b>（第二轮 GM 裁定 A3）。它<b>不改</b>其余五态的任何语义。</p>
  *
  * <h3>它和 {@link EmotionState} 是什么关系</h3>
  * <p>本类<b>不动</b>既有那台连续 0~100 的怒气/伤心/亲疏机器：那台机器继续管"强度与衰减"，
@@ -52,14 +57,25 @@ public final class EmotionMood {
     /** 转移日志的 kv 键前缀。 */
     public static final String KV_LOG = "moodlog:";
 
-    // ---- 5 个状态码 ----
+    // ---- 6 个状态码 ----
     public static final String S_CALM = "calm";
     public static final String S_ANGRY = "angry";
     public static final String S_HAPPY = "happy";
     public static final String S_SAD = "sad";
     public static final String S_LETDOWN = "letdown";
+    /** 第 6 档「罢工」（情绪 v2）：只骂人、不干活；从 {@code angry} 升上来。 */
+    public static final String S_STRIKE = "strike";
 
-    private static final String[] STATES = {S_CALM, S_ANGRY, S_HAPPY, S_SAD, S_LETDOWN};
+    private static final String[] STATES = {S_CALM, S_ANGRY, S_HAPPY, S_SAD, S_LETDOWN, S_STRIKE};
+
+    /** {@code 触发阈-strike} 的兜底默认值（写 N = 「超过 N 次」，与其余触发阈同一个口径）。 */
+    private static final int DEF_STRIKE_TH = 3;
+
+    /** {@code 罢工上限分钟} 的兜底默认值（罢工最长几分钟；与 prompt.md 那行**同源**）。 */
+    private static final int DEF_STRIKE_MAX_MIN = 10;
+
+    /** {@code 罢工平息条数} 的兜底默认值（连续几条"没有情绪信号"的消息就退到 angry）。 */
+    private static final int DEF_STRIKE_QUIET = 3;
 
     // ---- 计分信号（下标 = 评估优先级；码写进日志的 trigger=） ----
     static final int G_INSULT = 0;
@@ -141,6 +157,13 @@ public final class EmotionMood {
         public boolean selfTagScored;
         /** 最近一次"感兴趣"信号的时刻（E9 的"持续"判据）。 */
         public long lastInterest;
+        /**
+         * 罢工期间**连续几条"不带情绪信号"的消息**（情绪 v2 第二轮 §A2-{@code 罢工平息条数}）。
+         * <p>只用在 {@code strike} 态：到阈值就退到 {@code angry}；来一条带情绪信号的消息就清零。
+         * 它落在 {@code win} 里（与 {@code self_sends} 那批窗口计数同一处），
+         * <b>事实行与 state 的形状一个字段都没加</b>（§1.4）。</p>
+         */
+        public int strikeCalm;
 
         public int count(String code) {
             Integer v = counts.get(code);
@@ -233,6 +256,16 @@ public final class EmotionMood {
         return m;
     }
 
+    /**
+     * 一行 {@code mood:} JSON → {@link Mood}。
+     *
+     * <p><b>每一个子对象都可能缺</b>（{@code by} / {@code win} / {@code seen} / {@code fps} /
+     * {@code counts} / {@code dropped}）—— 缺了按"空"读，<b>绝不抛</b>。这条口径是夹具逼出来的：
+     * 原来 {@code J.sub()} 缺键返回 {@code null}，于是 {@code by}/{@code win} 一缺就 NPE，
+     * {@code load()} 靠外面那把 try 把它吞成"全新的一份"（状态读不出但至少不崩），
+     * 而 {@code onTimer()} 是**直接调本方法**的 ⇒ 一行半截数据会把整个 tick 的结算打死。
+     * 现在两种调用方都安全：完整行（{@code save()} 写出来的）行为逐字节不变。</p>
+     */
     private static void of(JsonObject o, Mood m) {
         m.state = norm(J.s(o, "state", S_CALM));
         m.since = J.l(o, "since", 0L);
@@ -242,7 +275,8 @@ public final class EmotionMood {
         m.peace = J.i(o, "peace", 0);
         m.counts = ints(J.sub(o, "counts"));
         m.byUser = new LinkedHashMap<String, Map<String, Integer>>();
-        for (Map.Entry<String, JsonElement> e : J.sub(o, "by").entrySet()) {
+        JsonObject by = J.sub(o, "by");
+        if (by != null) for (Map.Entry<String, JsonElement> e : by.entrySet()) {
             if (e.getValue() == null || !e.getValue().isJsonObject()) continue;
             m.byUser.put(e.getKey(), ints(e.getValue().getAsJsonObject()));
         }
@@ -251,6 +285,7 @@ public final class EmotionMood {
         m.sorrySlot = J.i(o, "sorry_slot", 0);
         m.dropped = ints(J.sub(o, "dropped"));
         JsonObject w = J.sub(o, "win");
+        if (w == null) w = new JsonObject();
         m.selfSends = J.i(w, "self_sends", 0);
         m.lastSelfSend = J.l(w, "last_self_send_ts", 0L);
         m.lastIn = J.l(w, "last_msg_ts", 0L);
@@ -262,13 +297,16 @@ public final class EmotionMood {
         m.selfTagTs = J.l(w, "self_tag_ts", 0L);
         m.selfTagScored = J.b(w, "self_tag_scored", false);
         m.lastInterest = J.l(w, "last_interest", 0L);
-        for (JsonElement e : J.list(o, "seen")) {
+        m.strikeCalm = J.i(w, "strike_calm", 0);
+        JsonArray seen = J.list(o, "seen");
+        if (seen != null) for (JsonElement e : seen) {
             try {
                 if (e != null) m.seen.add(Long.valueOf(e.getAsLong()));
             } catch (Throwable ignored) {
             }
         }
-        for (Map.Entry<String, JsonElement> e : J.sub(o, "fps").entrySet()) {
+        JsonObject fps = J.sub(o, "fps");
+        if (fps != null) for (Map.Entry<String, JsonElement> e : fps.entrySet()) {
             try {
                 m.fps.put(e.getKey(), Long.valueOf(e.getValue().getAsLong()));
             } catch (Throwable ignored) {
@@ -331,6 +369,7 @@ public final class EmotionMood {
             w.addProperty("self_tag_ts", m.selfTagTs);
             w.addProperty("self_tag_scored", m.selfTagScored);
             w.addProperty("last_interest", m.lastInterest);
+            w.addProperty("strike_calm", m.strikeCalm);
             o.add("win", w);
             JsonArray seen = new JsonArray();
             for (Long id : m.seen) seen.add(id);
@@ -404,7 +443,14 @@ public final class EmotionMood {
         }
     }
 
+    /**
+     * 档位的<b>严重度</b>（写进 kv 与事实行的 {@code level}；也用于 {@code dwellOk} 的"向上/向下"判定）。
+     * <p>v2 把 {@code strike} 放在梯子顶端（4）：它比 {@code angry}（3）更高，
+     * 所以"罢工降回生气"在 {@code dwellOk} 眼里是一次向下的动作（不会被它当成升级放行）。
+     * <b>angry = 3 一个字没动</b>（探针按字面钉它）。</p>
+     */
     static int levelOf(String state) {
+        if (S_STRIKE.equals(state)) return 4;
         if (S_ANGRY.equals(state)) return 3;
         if (S_SAD.equals(state)) return 2;
         if (S_LETDOWN.equals(state)) return 1;
@@ -420,7 +466,7 @@ public final class EmotionMood {
     // ================================================================ 就绪检查
 
     /**
-     * 状态机现在能不能动（开关 + prompt.md + 库 + ACL）。
+     * 状态机现在能不能动（开关 + prompt.md + 库）。
      *
      * @return {@code null} = 能动；否则是"为什么不能"（调用方按需打日志）
      */
@@ -428,13 +474,7 @@ public final class EmotionMood {
         if (c == null || !c.loaded()) return "prompt.md 没读出来（档位层不生效）";
         if (!c.flag("情绪开关", true)) return "档位层已关（prompt.md 的「情绪开关」= false）";
         if (s == null) return "拿不到 store";
-        if (h != null) {
-            try {
-                String deny = needWrite ? h.needDb(EmotionState.LIB, 'W') : h.needDb(EmotionState.LIB, 'R');
-                if (deny != null) return "ACL 拒了 " + EmotionState.LIB + " 的 " + (needWrite ? "W" : "R") + " 位：" + deny;
-            } catch (Throwable ignored) {
-            }
-        }
+        // 本插件不提供工具（没有 op 可判）：档位层只在 SYSTEM 主体的钩子上结算，读写自己的表恒放行。
         return null;
     }
 
@@ -607,6 +647,20 @@ public final class EmotionMood {
             valid[G_QUIET] = m.count("quiet") > 0;
             // ---- 评估（唯一结论）
             decide(m, c, r, wall, qq, valid, praiseOk, fp, fpSeen, sig);
+            // ---- ★ 第九轮（GM 令 A1）：**转述场景不锁人** ----
+            // 本条入站消息里出现**第三方指称**（`[提及 qq=X]`，X 既不是她自己、也不是说话人；
+            // 或者带一个 `[引用 msg_id=…]` 段）⇒ 这一句很可能是"**转述别人骂我**"
+            // ⇒ **不要把说话人锁成 `trigger_by`**（`by` 保持 0）。怒气/计数**照记**（她可以生气），
+            //    后果是：`MoodStage.finish()` 不会 @ 他（没锁人）· `transform()` 的 S2 会**软化**说话人
+            //    —— 她可以生气，但不能对着**传话的人**开骂。
+            // ★ 刻意**不**在 `decide` 内部逐处改 `m.by`：只在这里收一次口（同一处、可读、可测），
+            //   而且它发生在 `save()` 之前 ⇒ 落库的就是 `by=0`。
+            // ★★ 第十一轮（GM 令，复核证伪"可达误伤"）：归零**必须"本条确实在骂/贬"才生效** ——
+            //   否则一条毫无敌意的日常句（例：`说明一下他那个方案` = 说+他）就能把**已经锁好的**触怒者
+            //   解开（`by` 从 1284688456 变 0）⇒ 她下一轮对真正的冒犯者不再 @、不再分句，而且
+            //   `hot && by<=0` 还会让该场合攻击词**整体软化**（正好把第九轮要修的东西镜像回来）。
+            //   用的就是 `decide(...)` 里那份现成信号（`sig.insult || sig.belittle`），**不新造第二套判据**。
+            if ((sig.insult || sig.belittle) && thirdParty(ev, text, c)) m.by = 0L;
             r.st = m;
             if (r.changed) log(c, h, r.line(scopeId));
             r.wrote = save(s, scopeId, m);
@@ -641,6 +695,7 @@ public final class EmotionMood {
         m.floodChars = 0;
         m.fps = new LinkedHashMap<String, Long>();
         m.lastInterest = 0L;
+        m.strikeCalm = 0;
         if (had && !S_CALM.equals(from)) {
             m.state = S_CALM;
             m.trigger = "grid";
@@ -733,6 +788,10 @@ public final class EmotionMood {
      * 把现场评估成<b>一个</b>结论（P1 即刻通道 &gt; 常规通道；P2 骂 &gt; 求饶；P3 负向优先；
      * P4 不降级；P6 只能经 {@code calm} 向上）。
      *
+     * <p><b>情绪 v2（§1）</b>：{@code strike} 的维持/退出与 {@code angry → strike} 的升级
+     * 在<b>以上所有通道之前</b>先判（见方法体第一段）—— 那条即刻通道会把"另一个人骂过来"
+     * 写成 {@code move(S_ANGRY)}，既降级又会换掉 {@code trigger_by}，与"罢工锁人"直接冲突。</p>
+     *
      * <p><b>P3「负向优先」是怎么落地的</b>：常规负向的<b>扫描写在正向分支之前</b>
      * （老写法反过来：正向分支先判、先 {@code return}）⇒ 一条消息里既有夸/兴趣、又有贬低/冷落/戳…
      * 时，取的是<b>负向</b>。甲方口径：被骂 ⇒ 即刻生气，不许被同一条消息里的一个夸词抵掉。</p>
@@ -749,6 +808,51 @@ public final class EmotionMood {
         int cur = levelOf(from);
         boolean neg = S_ANGRY.equals(from) || S_SAD.equals(from) || S_LETDOWN.equals(from);
         int peaceNeed = c.i("缓和分", 3);
+        // ---- ★★ 情绪 v2 §1：罢工态（strike）的维持与退出，以及 angry → strike 的升级 ★★
+        // 位置**刻意在"即刻通道"之前**：那条通道会把"另一个人骂过来"写成 move(S_ANGRY, …)，
+        // 既把罢工降回生气、又会把 trigger_by 换成别人 —— 而 §1.2 要求罢工**锁人**。
+        // 顺序也不能反：先判"已在罢工"（维持/退出），再判"该不该升上来"。
+        if (S_STRIKE.equals(from)) {
+            boolean sorryIn = valid[G_SORRY] && m.count("sorry") > 0;
+            if (!sorryIn) {
+                // §1.3-③（第二轮 GM 裁定）：**上限分钟**到点 ⇒ 退到 angry（since 起算，与网格无关）
+                int capMin = c.i("罢工上限分钟", DEF_STRIKE_MAX_MIN);
+                if (strikeOver(m, now, capMin)) {
+                    m.strikeCalm = 0;
+                    clearStrikeLevel(m);
+                    move(m, r, now, m.by, S_ANGRY, "peace", 0, 0,
+                            "罢工到点（超过 罢工上限分钟 " + capMin + "）");
+                    return;
+                }
+                // §A3（第二轮 GM 裁定）：**任何带情绪信号的消息只维持 strike，绝不降级**
+                // （被骂/被贬低/戳/重复问/冷落/刷屏/哄夸…都算"有事发生"）—— 甲方要的是"专心骂人"。
+                if (anySignal(sig, valid, fpSeen)) {
+                    m.strikeCalm = 0;
+                    keepStrike(m, r, "罢工中（这一条带情绪信号 ⇒ 只维持，不降级）");
+                    return;
+                }
+                // §A2（第二轮 GM 裁定）：**连续 N 条不带情绪信号的消息** ⇒ 退到 angry
+                int need = c.i("罢工平息条数", DEF_STRIKE_QUIET);
+                int calm = m.strikeCalm + 1;
+                if (need > 0 && calm >= need) {
+                    m.strikeCalm = 0;
+                    clearStrikeLevel(m);
+                    move(m, r, now, m.by, S_ANGRY, "peace", calm, need,
+                            "罢工平息（连续 " + calm + " 条没有情绪信号）");
+                    return;
+                }
+                m.strikeCalm = calm;
+                keepStrike(m, r, "罢工中（连续 " + calm + "/" + Math.max(0, need) + " 条没有情绪信号）");
+                return;
+            }
+            // §1.3-① 求饶：落到下面既有的 sorry 分支（它 move 到 calm）；顺带把升级计数清掉，
+            // 免得"道歉之后一句普通的话"又被旧计数顶回罢工。
+            clearStrikeLevel(m);
+        }
+        if (S_ANGRY.equals(from) && toStrike(m, c)) {
+            enterStrike(m, c, r, now, qq);
+            return;
+        }
         // ---- P1/P2：即刻通道（不受停留下限约束）—— 骂 > 求饶 > 常规
         if (valid[G_INSULT] && m.count("insult") > 0) {
             int n = m.count("insult");
@@ -1007,6 +1111,107 @@ public final class EmotionMood {
         r.reason = reason;
     }
 
+    // ================================================================ ⑧ 罢工（strike，情绪 v2 §1）
+
+    /**
+     * 激怒**等级**到罢工阈值了吗（§1.2 的两条判据，<b>或</b>的关系；<b>两条同值</b>）。
+     *
+     * <p><b>第二轮 GM 裁定（A1）</b>：两条路径**共用一个可调数字** {@code 触发阈-strike}（默认 3）——
+     * 原来的「按人 ≥ 2」太松，等于给群里任何人一个"骂两句就让她停工"的开关，也会把 angry/strike
+     * 两档挤在一起（A1 那条"先看到生气态的拆句 + @"就观察不到了）。</p>
+     *
+     * <p><b>「level」在这里指什么</b>（契约里那个词必须落到具体量上，否则实现会各写各的）：
+     * 用两个**现成的计数**（都在 kv 里，不新增字段，§1.4）：</p>
+     * <ul>
+     *   <li>{@code m.insultGrp}（kv 的 {@code insult_grp}）= 这一格里<b>场合合计</b>被激怒了几次；</li>
+     *   <li>{@code by.insult + by.belittle}（同一个 {@code trigger_by} 的按人计数）。</li>
+     * </ul>
+     * <p>刻意<b>不</b>拿事实行里的 {@code level}（那是 {@link #levelOf} 的档位严重度，{@code angry}
+     * 恒为 3）当判据 —— 拿它去比 {@code 触发阈-strike: 3} 会让"只要生气就立刻罢工"。</p>
+     */
+    static boolean toStrike(Mood m, EmotionCfg c) {
+        if (m == null) return false;
+        int th = c == null ? DEF_STRIKE_TH : c.i("触发阈-strike", DEF_STRIKE_TH);
+        if (th < 1) th = 1;
+        int grid = m.insultGrp;                                                 // 场合合计（被骂）
+        int by = m.countOf("insult", m.by) + m.countOf("belittle", m.by);       // 同一个 trigger_by
+        return grid >= th || by >= th;                                          // ★ 两条路径同值（A1）
+    }
+
+    /**
+     * 升为罢工（§1.2）：改状态、{@code trigger_by} <b>锁人</b>、并把"用掉的那一份激怒计数"消耗掉。
+     *
+     * <p>{@code trigger} 写 {@code S_STRIKE} ⇒ 事实行的 trigger 读 {@code 触发名-strike}
+     * （出厂值「被激怒到罢工」）。</p>
+     *
+     * <p><b>为什么要消耗计数</b>：两条出口（{@code 罢工上限分钟} / {@code 罢工平息条数}）都要求
+     * "退到 angry 之后**不要立刻又被旧计数顶回 strike**"。消耗掉之后，她要再攒够 {@code 触发阈-strike}
+     * 次**新的**激怒才会重新罢工。</p>
+     */
+    private static void enterStrike(Mood m, EmotionCfg c, Result r, long now, long qq) {
+        long by = m.by > 0L ? m.by : qq;
+        int n = m.insultGrp;
+        int th = c == null ? DEF_STRIKE_TH : c.i("触发阈-strike", DEF_STRIKE_TH);
+        move(m, r, now, by, S_STRIKE, S_STRIKE, n, th < 1 ? 1 : th, "被激怒到罢工");
+        m.by = by;                                  // ★ 锁人（§1.2）：升级之后不再被别人改写
+        clearStrikeLevel(m);
+    }
+
+    /** 把"激怒等级"与"平息计数"清零（进/出罢工都用它；只有 strike 这一路会调）。 */
+    private static void clearStrikeLevel(Mood m) {
+        if (m == null) return;
+        m.byUser.remove("insult");
+        m.byUser.remove("belittle");
+        m.insultGrp = 0;
+        m.strikeCalm = 0;
+    }
+
+    /**
+     * 罢工到点了吗（{@code 罢工上限分钟}，从 {@code since} 起算）。
+     * <p>{@code capMin <= 0} = 不设上限（配置关掉这一条出口）。</p>
+     */
+    static boolean strikeOver(Mood m, long now, int capMin) {
+        if (m == null || capMin <= 0) return false;
+        long since = m.since;
+        if (since <= 0L || now <= since) return false;
+        return (now - since) >= capMin * 60000L;
+    }
+
+    /**
+     * 这一条消息**带情绪信号**吗（§A3 的判据；纯函数，没有任何副作用）。
+     *
+     * <p>口径（写在报告里，免得下一个人各猜一半）—— 全部是**这一条自己的**证据，刻意不看账本存量
+     * （{@code hit()} 那一路的"戳≥4次/重复问≥4次"是**触发阈值**，而且计数用完之前一直在账上，
+     * 拿它当"这一条带没带信号"会把后面的普通消息全判成信号，平息计数永远涨不上去）：</p>
+     * <ul>
+     *   <li><b>正文型</b>：{@code sig.any()}（骂/求饶/夸/兴趣/贬低/冷落/违规/做不到/为难）—— 正负都算；</li>
+     *   <li><b>重复问</b>：{@code fpSeen}（这个请求此前出现过）；</li>
+     *   <li><b>本条的结算信号</b>：{@code valid[骂|求饶|夸|兴趣|贬低|冷落]}（都由本条算出）；</li>
+     *   <li><b>戳一戳</b>：{@code valid[G_POKE]} —— 由 {@link #onNotice} 标上（那个事件本来就是一次戳）。</li>
+     * </ul>
+     * <p>⇒ 只有"完全普通的闲话"才计入 {@code 罢工平息条数}。</p>
+     */
+    private static boolean anySignal(EmotionCfg.Sig sig, boolean[] valid, boolean fpSeen) {
+        if (sig != null && sig.any()) return true;
+        if (fpSeen) return true;
+        if (valid == null) return false;
+        return valid[G_INSULT] || valid[G_SORRY] || valid[G_PRAISE] || valid[G_INTEREST]
+                || valid[G_BELITTLE] || valid[G_COLD] || valid[G_POKE];
+    }
+
+    /** 维持 strike：一个字段都不改（不改 state / trigger / by / since），只把 Result 写成"续期"。 */
+    private static void keepStrike(Mood m, Result r, String reason) {
+        r.from = m.state;
+        r.to = m.state;
+        r.changed = false;
+        r.renewed = true;
+        r.trigger = m.trigger;
+        r.by = m.by;
+        r.n = 0;
+        r.th = 0;
+        r.reason = reason;
+    }
+
     // ================================================================ ③ on_notice（戳：通路 A）
 
     /**
@@ -1046,7 +1251,12 @@ public final class EmotionMood {
             boolean agg = m.pokeGrp > nOf(c, G_POKE) * 2;
             m.pokeGrp = agg ? (int) Math.max(0L, m.pokeGrp - aggNeed) : (m.pokeGrp + 1);
             // 戳这一路没有"请求正文"⇒ 没有请求指纹（第 8 个参数传 null）
-            decide(m, c, r, now, qq, new boolean[G_N], false, null, false, c.sig(null));
+            // ★ v2 第二轮：把"这一条就是戳事件"标进 valid[G_POKE] —— 它只被罢工那一支的
+            //   {@link #anySignal} 读（"带情绪信号的消息"里点名包含"戳"），别的分支一个都不读它，
+            //   所以非罢工路径的行为逐字节不变。
+            boolean[] pokeValid = new boolean[G_N];
+            pokeValid[G_POKE] = true;
+            decide(m, c, r, now, qq, pokeValid, false, null, false, c.sig(null));
             r.st = m;
             if (r.changed) log(c, h, r.line(scopeId));
             r.wrote = save(s, scopeId, m);
@@ -1073,8 +1283,13 @@ public final class EmotionMood {
     // ================================================================ ④ on_timer（网格的显式结算点）
 
     /**
-     * 基板唯一 tick：把"网格已经翻页"的场合显式结算掉（{@code kv} 里还写着 {@code angry} 的那种），
-     * 让"20 分钟重置"不必等下一条消息才发生。
+     * 基板唯一 tick：把"到点该结算"的场合显式结算掉，不必等下一条消息 ——
+     * ① <b>网格翻页</b>（{@code kv} 里还写着 {@code angry} 的那种）⇒ 回 {@code calm}，让"20 分钟重置"按时发生；
+     * ② <b>罢工到点</b>（情绪 v2 第二轮 §A2-{@code 罢工上限分钟}）⇒ 回 {@code angry}。
+     * 罢工上限（默认 10 分钟）**比网格（20 分钟）短**，所以它必须独立于网格判定：tick 每 20 秒跑一次，
+     * 于是"到点自动退出"是**真正的到点**（不依赖有没有人说话）。
+     *
+     * <p>除罢工行之外，本方法的行为<b>逐字节不变</b>（非 strike 行仍旧是"slot 不同才动"）。</p>
      *
      * @return 结算掉的场合数
      */
@@ -1088,6 +1303,7 @@ public final class EmotionMood {
             return 0;
         }
         long slot = slotOf(now, c);
+        int capMin = c.i("罢工上限分钟", DEF_STRIKE_MAX_MIN);
         int changed = 0;
         for (JsonObject row : rows) {
             String key = J.s(row, "k", "");
@@ -1096,29 +1312,198 @@ public final class EmotionMood {
             JsonElement el = parse(val);
             if (el == null || !el.isJsonObject()) continue;
             Mood probeMood = new Mood();
-            of(el.getAsJsonObject(), probeMood);
-            if (probeMood.slot == slot) continue;
+            try {
+                of(el.getAsJsonObject(), probeMood);
+            } catch (Throwable bad) {
+                // 一行坏数据（缺 `by`/`win` 那一类半截行）不许把**整个 tick 的结算**打死 ——
+                // 与 load() 那把 try 同一个口径（"一行坏数据不该把插件打死"）：跳过这一行，继续下一条。
+                // ★ 这是顺手补的一处**既有**脆弱点（夹具用一条手写的半截 mood 行逼出来的；
+                //   生产行由 save() 写出，`by`/`win` 一定在，所以真机本来碰不到 —— 但它确实是个雷）。
+                continue;
+            }
+            boolean strikeRow = S_STRIKE.equals(probeMood.state);
+            if (probeMood.slot == slot && !strikeRow) continue;      // 非罢工行：与改动前逐字节同路
             String scopeId = key.substring(KV.length());
             Result r = new Result();
+            String line = null;
             synchronized (lockOf(scopeId)) {
                 Mood fresh = load(s, scopeId);
-                if (fresh.slot == slot) continue;
-                rollover(fresh, slot, now, c, r);
-                if (!save(s, scopeId, fresh) || !r.changed) continue;
+                if (S_STRIKE.equals(fresh.state)) {
+                    // 罢工到点（与网格无关）：退到 angry。即使它已经翻过页，也先按"到点"结算。
+                    if (strikeOver(fresh, now, capMin)) {
+                        fresh.strikeCalm = 0;
+                        clearStrikeLevel(fresh);
+                        move(fresh, r, now, fresh.by, S_ANGRY, "peace", 0, 0,
+                                "罢工到点（超过 罢工上限分钟 " + capMin + "）");
+                        if (save(s, scopeId, fresh) && r.changed) line = r.line(scopeId);
+                    }
+                }
+                if (line == null) {
+                    if (fresh.slot == slot) continue;
+                    rollover(fresh, slot, now, c, r);
+                    if (!save(s, scopeId, fresh) || !r.changed) continue;
+                    line = r.line(scopeId);
+                }
             }
-            GRID_LAST = r.line(scopeId);
+            GRID_LAST = line;
             changed++;
         }
         return changed;
     }
 
-    /** 上一次 {@link #onTimer} 里"网格翻页回平淡"的那一行（调用方决定打不打/怎么落）。 */
+    /**
+     * 上一次 {@link #onTimer} 里**真的改了状态**的那一行（网格翻页回平淡，或罢工到点回生气；
+     * 调用方决定打不打/怎么落）。
+     */
     public static String gridLast() {
         return GRID_LAST;
     }
 
-    // ================================================================ ⑤ 请求指纹
+    // ================================================================ ④.5 转述 / 第三方指称（第九轮 GM 令 A1）
 
+    /**
+     * 这条入站消息**带第三方指称**吗（= 很可能是"转述别人骂我"，不是他本人骂我）。
+     *
+     * <p>判据（任一成立即算）：</p>
+     * <ol>
+     *   <li>段里有 {@code at} 且它的 {@code qq} <b>既不是说话人、也不是她自己</b>（{@code self_id}）
+     *       —— 即"点名了第三方"；{@code @全体成员}（{@code qq=all}）不算；</li>
+     *   <li>段里有 {@code reply}（引用某条消息）—— 引用 = 接话/转述；</li>
+     *   <li>文本兜底：正文里出现 {@code [提及 qq=N]}（同上，排除说话人/自己）或 {@code [引用 msg_id=…]}
+     *       —— 基板把非文字段写成这种方括号标签，两种形态都认。</li>
+     * </ol>
+     *
+     * <p><b>为什么需要它</b>（真机事故，GM 第九轮令）：情绪机原来把"入站文本里有骂词"一律归因给**说话人**
+     * （{@code trigger_by = caller}），而机制完全不知道"这是**转述**、真正的骂人者在别处"
+     * ⇒ 她对着**传话的人**开骂并 @ 了他（群 985441254 的实证）。</p>
+     *
+     * <p><b>已知代价（如实记录）</b>：判据 ② 是"引用段一律算转述"⇒
+     * "引用了她自己的话然后再骂她"这种也会**不锁人**（于是不加 @）。要区分"引用的是谁的话"
+     * 得查基板的引用缓存（{@code QuoteCache}），那是另一批的事；本轮按 GM 口径实现，边界明写在报告里。</p>
+     */
+    static boolean thirdParty(Ev ev, String text, EmotionCfg c) {
+        try {
+            long self = ev == null ? 0L : ev.selfId();
+            long speaker = ev == null ? 0L : ev.userId();
+            if (ev != null) {
+                List<JsonObject> segs = ev.segments();
+                if (segs != null) {
+                    for (JsonObject seg : segs) {
+                        if (seg == null) continue;
+                        String type = Str.lower(Str.trim(J.s(seg, "type", "")));
+                        if ("reply".equals(type)) return true;
+                        if (!"at".equals(type)) continue;
+                        JsonObject data = J.sub(seg, "data");
+                        long q = qqOf(data == null ? "" : J.s(data, "qq", ""));
+                        if (q > 0L && q != speaker && q != self) return true;
+                    }
+                }
+            }
+            // 真机拿到的就是 `ev.plainText()`（EmotionSkill 递进来的那条）；它空了才回退再要一次。
+            String t = text;
+            if (Str.blank(t) && ev != null) t = ev.plainText();
+            if (Str.blank(t)) return false;
+            // 文本兜底：`[提及 qq=N]`。★ 生产路径**不触发**（plainText 只有 text 段，方括号标签从不进来）
+            //   —— 留着是因为"基板若把非文字段写成标签"那种形态在别的落点存在；第五轮口径不动。
+            int i = t.indexOf("[提及 qq=");
+            while (i >= 0) {
+                int j = t.indexOf(']', i);
+                String raw = j > i ? t.substring(i + 6, j) : t.substring(i + 6);
+                long q = qqOf(raw);
+                if (q > 0L && q != speaker && q != self) return true;
+                i = t.indexOf("[提及 qq=", i + 1);
+            }
+            if (t.indexOf("[引用 msg_id=") >= 0) return true;
+            // ---- ★ 第十轮（GM 令）：**纯文本转述启发式**（真机那条唯一救得回来的机制判据）----
+            //   真机入站 `你要怎么骂回去？他说你是个智障` 里：他 @ 的是**她自己**、没有引用段
+            //   ⇒ 上面两条段判据全不成立 ⇒ 必须靠"转述词 + 第三方指称"这层文本判据。
+            return looksRelayed(t, c);
+        } catch (Throwable t) {
+            return false;                                   // 判不出来 = 按"不是转述"处理（宁可锁人，也不静默丢情绪）
+        }
+    }
+
+    /** 「转述词」的同源兜底（`prompt.md` 的 `转述词:` 读不出来时用）。改 prompt.md 要同步改这里。 */
+    static final String DEF_RELAY_WORDS = "说,讲,骂,称,听说,据说,传闻,转告,告诉,背后,嚼舌,嘀咕";
+    /** 「第三方指称」的同源兜底（★ 刻意**不含 `你`**：`你` 是收话人，不是"话是别人说的"那个别人）。 */
+    static final String DEF_THIRD_WORDS = "他,她,人家,别人,有人,某某,那人,那边";
+
+    /**
+     * 纯文本转述启发式（第十轮 GM 令）：**同一句里同时命中 ≥1 个「转述词」和 ≥1 个「第三方指称」**
+     * ⇒ 判为转述 ⇒ 调用方把 {@code m.by} 清 0（不锁人）。
+     *
+     * <p>两个词表都是**数据驱动**的（`prompt.md` 的 `转述词:` / `第三方指称:`，逗号分隔）——
+     * 读不出来才用 {@link #DEF_RELAY_WORDS} / {@link #DEF_THIRD_WORDS} 兜底。</p>
+     *
+     * <p><b>已知边界（如实记）</b>：`听说你最近很菜` 这种**没有第三方指称**的句子按本口径**不算转述**
+     * （仍锁人、仍 @）—— 宁可漏判，也不把"冲她本人来的话"误判成转述（那会削掉甲方 E4 的 @ 指名）。</p>
+     *
+     * <p>★★ 第十一轮（GM 令，复核证伪"可达误伤"）：**「第三方指称」命中处若紧跟 `妈` ⇒ 那一次命中不算**
+     * （例：`他` + `妈` = `他妈`，那是直接开骂的填充词，不是"话是别人说的"那个别人）。
+     * 这条**写在代码里按"命中词后紧跟妈"实现**，**不动数据键**（免得又被别的句子踩到）。
+     * 同一命中词还有别处不跟 `妈` 的出现时，仍算命中。</p>
+     */
+    static boolean looksRelayed(String text, EmotionCfg c) {
+        if (Str.blank(text)) return false;
+        boolean relay = false;
+        boolean third = false;
+        for (String w : words(c, "转述词", DEF_RELAY_WORDS)) {
+            if (Str.has(w) && text.indexOf(w) >= 0) { relay = true; break; }
+        }
+        if (!relay) return false;
+        for (String w : words(c, "第三方指称", DEF_THIRD_WORDS)) {
+            if (Str.has(w) && thirdHit(text, w)) { third = true; break; }
+        }
+        return third;
+    }
+
+    /**
+     * 「第三方指称」的一次命中：词在正文里出现，且**至少有一次出现**后面**不紧跟** `妈`。
+     * <p>`他妈` / `她妈` 这类是直接开骂的填充词 ⇒ 那一次不算（第十一轮 GM 令）。</p>
+     */
+    private static boolean thirdHit(String text, String w) {
+        int i = text.indexOf(w);
+        while (i >= 0) {
+            int after = i + w.length();
+            if (after >= text.length() || text.charAt(after) != '妈') return true;
+            i = text.indexOf(w, i + 1);
+        }
+        return false;
+    }
+
+    /** 词表：`prompt.md` 的键优先，空/异常时回退到同源兜底串。 */
+    private static List<String> words(EmotionCfg c, String key, String def) {
+        try {
+            List<String> l = c == null ? null : c.tags(key);
+            if (l != null && !l.isEmpty()) return l;
+        } catch (Throwable ignored) {
+        }
+        List<String> out = new java.util.ArrayList<String>();
+        for (String p : def.split(",")) {
+            String w = Str.trim(p);
+            if (Str.has(w)) out.add(w);
+        }
+        return out;
+    }
+
+    /** {@code qq} 字段可能是数字串或 {@code "all"}；读不出返回 0。 */
+    private static long qqOf(String s) {
+        if (Str.blank(s)) return 0L;
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < s.length(); i++) {
+            char ch = s.charAt(i);
+            if (ch >= '0' && ch <= '9') sb.append(ch);
+            else if (sb.length() > 0) break;
+        }
+        if (sb.length() == 0) return 0L;
+        try {
+            return Long.parseLong(sb.toString());
+        } catch (Throwable t) {
+            return 0L;
+        }
+    }
+
+    // ================================================================ ⑤ 请求指纹
     /**
      * 请求指纹：归一化（只留字母数字汉字）+ FNV-1a + 长度前缀。
      * <p><b>必须逐字可复现</b>：同一句话每次算出来必须一模一样（不同实现/不同 JVM 之间也要一致），
@@ -1388,12 +1773,16 @@ public final class EmotionMood {
      * 不能因为"文件读不出来"就静默消失。</p>
      */
     static final String DEF_SELF_ASK =
-            "做不到/为难/违规的事：最后单独一行写 [[mood:做不到]] 或 [[mood:为难]] 或 [[mood:违规]]（只写一个）。";
+            "做不到/为难/违规的事：最后单独一行写 [[mood:做不到]] 或 [[mood:为难]] 或 [[mood:违规]]（只写一个）；"
+            + "若是转述别人骂我（不是他本人骂），加写 [[mood:转述]]（机器据此不加 @）。";
 
     /**
-     * 把一块拼成"情绪块"：第 1 行事实 + 第 2 行语气 + 第 3 行边界 + 第 4 行自报要求 + 末行覆盖句。
+     * 把一块拼成"情绪块"（情绪 v2 = <b>最多 6 行</b>）：
+     * 第 1 行事实 + 第 2 行语气 + 第 3 行<b>范例</b> + 第 4 行边界 + 第 5 行自报要求 + 末行覆盖句。
      *
-     * <p>语气行 / 边界行 / 自报要求行都是"取到内容才加"（可选组口径）⇒ 行数在 3~5 之间浮动。</p>
+     * <p>语气行 / <b>范例行</b> / 边界行 / 自报要求行都是"取到内容才加"（可选组口径）
+     * ⇒ 行数在 3~6 之间浮动。范例行<b>只在 {@code 范例-<码>} 有值时注入</b>，
+     * 位置钉在<b>语气行之后、边界行之前</b>（情绪 v2 §2 的"新增注入行"）。</p>
      *
      * @return 非空则一定满足「首行 {@code mood: }」「末行覆盖句」这两条逐字锚点
      */
@@ -1403,12 +1792,36 @@ public final class EmotionMood {
         lines.add(factLine(c, m));
         String tone = toneLine(c, state);
         if (Str.has(tone)) lines.add("【此刻情绪：" + label(c, state) + "】" + tone);
+        String eg = exampleLine(c, state);
+        if (Str.has(eg)) lines.add(eg);
         String bound = boundLine(c, state);
         if (Str.has(bound)) lines.add(bound);
         String self = selfAsk(c);
         if (Str.has(self)) lines.add(self);
         lines.add(coverLine(c));
         return Str.join(lines, "\n");
+    }
+
+    /**
+     * <b>范例行</b>（情绪 v2 新增，情绪块的第 3 行）：`例：A ｜ B ｜ C`。
+     *
+     * <p>来源 = {@code prompt.md} 的 {@code 范例-<码>}（每个状态一行，3–5 条、每条 ≤ 40 字，
+     * 条与条之间用 {@code |} 或全角 {@code ｜} 分隔）。<b>没值就不注入这一行</b>
+     * （块退回五行，与 v1 的形状一致）。</p>
+     *
+     * <p>为什么走 {@code c.s(...)} 而不是 {@code c.tags(...)}：{@code tags()} 是按<b>逗号</b>切的，
+     * 而范例里的逗号是句子的一部分 —— 拿它切会把一条例句劈成两半。分隔符只有一个：竖线。</p>
+     */
+    public static String exampleLine(EmotionCfg c, String state) {
+        String v = c == null ? "" : c.s("范例-" + state, "");
+        if (!Str.has(v)) return "";
+        List<String> items = new ArrayList<String>();
+        for (String p : v.split("[|｜]")) {
+            String t = Str.trim(p);
+            if (!t.isEmpty()) items.add(t);
+        }
+        if (items.isEmpty()) return "";
+        return "例：" + Str.join(items, " ｜ ");
     }
 
     // ⑨ 「孙吧式：可替换段落」这一节已删除（2026-09-16）。

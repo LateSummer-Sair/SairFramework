@@ -32,11 +32,10 @@ import sair.v4.skill.Skill;
  * ② <b>动作前先报数量</b>：先把候选清单扫出来、把数量与预览报出来，再谈动不动手；<br>
  * ③ <b>默认试运行</b>（{@code dry_run} 缺省 = {@code prompt.md} 的「默认试运行」= true）：不显式给
  * {@code dry_run:false} 就一个字节都不落盘；<br>
- * ④ <b>能不能改，按目标路径自己的位判</b>：改名逐个判「源文件 W + 目标 W」，转格式逐个判
- * 「源图 R + 目标图 W」（{@link #check} / {@link #checkRead}），判不过是<b>那一个目标</b>失败、
- * 把 ACL 原文收进结果，绝不"要么全做要么全不做"。于是按类默认分配：{@code files/} 树属 C、无专有位 ⇒ 非主人只读
- * （{@code R}）⇒ 非主人改不动；数据根里别处是 B 类（{@code ALLUSER} 无位）⇒ 非主人改不了；
- * 主人恒全权、她自己（{@code SYSTEM}）的 B 类是 {@code R|W}。要放宽只能由主人写账本例外条目。</p>
+ * ④ <b>能不能改，按 op 判</b>：{@code rename} 判 {@code batch.rename}、{@code convert} 判
+ * {@code batch.convert} —— 每个动作分支开头各判一次（{@link #rename} / {@link #convert}），
+ * 判不过就把拒绝原文原样回给调用方、一个字节都不动。授权与否由主人写技能管控表
+ * （{@code data/skillctl.json}）：op 放行才动手。</p>
  *
  * <p>改名只动"主名"（扩展名保留），替换串支持 {@code $1} 这类分组引用；目标已存在时跳过（不覆盖）。
  * 转格式走 Java2D/ImageIO：目标格式要既在 {@code prompt.md} 的白名单里、本机又真的能写；
@@ -50,6 +49,15 @@ public class BatchSkill implements Skill {
     private static final String ALLOW_DEF = "png,jpg,jpeg,gif,bmp";
 
     // ================================================================ 工具入口
+
+    /**
+     * 声明本技能的两个 op（技能管控表就是按这些名字放行或封禁的）。
+     */
+    @Override
+    public void declareOps(sair.v4.auth.OpList ops) {
+        ops.add("batch", "rename", "正则批量改名");
+        ops.add("batch", "convert", "图片批量转格式");
+    }
 
     @Override
     public Object call(Args a, Host h) {
@@ -71,11 +79,11 @@ public class BatchSkill implements Skill {
 
     /** 正则批量改名：先报数量与预览，dry_run=false 才真的改名。 */
     private static String rename(Args a, Host h, Cfg c) {
+        // 这个动作分支的 op 判定（技能管控表：op 放行才动手）
+        String deny = h.need("batch.rename");
+        if (deny != null) return deny;
         File root = root(h);
         if (root == null) return msg(c, "文案-无宿主", "no host");
-        // 这里**不判"数据根"的写位**：能不能改，一律按**目标路径自己**的位判（见下面循环里的
-        // check(h, from) / check(h, to)）。判数据根会把 `files/`（属 C、无专有位）里的目标也一并挡掉 ——
-        // 数据根在 B 类、ALLUSER 无位，而 `files/` 属 C ⇒ 非主人只有 R，写不进也改不动。
         String p = Str.trim(a.str("dir"));
         if (p.isEmpty()) return a.missing("dir");
         String raw = Str.trim(a.str("pattern"));
@@ -150,14 +158,7 @@ public class BatchSkill implements Skill {
                 fail++;
                 continue;
             }
-            // 一个动作碰多个文件 → 逐个判（这一步真的会改这个文件）
-            String rFrom = check(h, from);
-            String rTo = check(h, to);
-            if (rFrom != null || rTo != null) {
-                fail++;
-                if (done.size() < limit) done.add(rFrom != null ? rFrom : rTo);
-                continue;
-            }
+            // 这个动作的 op 已在分支开头判过：这里只做改名（碰哪些文件由上面的候选清单定）
             boolean renamed = false;
             try {
                 renamed = from.renameTo(to) && to.isFile();
@@ -186,10 +187,11 @@ public class BatchSkill implements Skill {
 
     /** 图片批量转格式（Java2D/ImageIO）：同样先报数量，dry_run=false 才写盘。 */
     private static String convert(Args a, Host h, Cfg c) {
+        // 这个动作分支的 op 判定（技能管控表：op 放行才动手）
+        String deny = h.need("batch.convert");
+        if (deny != null) return deny;
         File root = root(h);
         if (root == null) return msg(c, "文案-无宿主", "no host");
-        // 同 rename：不判"数据根"的写位，由循环里逐目标判（读源图 R + 写目标 W）。
-        // 数据根是 B 类、ALLUSER 无位 ⇒ 判它会连带否掉 `files/`（属 C、无专有位 ⇒ 非主人只有 R）里的目标。
         String p = Str.trim(a.str("dir"));
         if (p.isEmpty()) return a.missing("dir");
         String to = normalizeFormat(a.str("to"));
@@ -256,14 +258,7 @@ public class BatchSkill implements Skill {
                 fail++;
                 continue;
             }
-            // 读源图（B:R）+ 写目标图（B:W）：一个动作碰两个资源，逐个判
-            String rFrom = checkRead(h, from);
-            String rTo = check(h, to1);
-            if (rFrom != null || rTo != null) {
-                fail++;
-                if (done.size() < limit) done.add(rFrom != null ? rFrom : rTo);
-                continue;
-            }
+            // 这个动作的 op 已在分支开头判过：这里只读源图、写目标图
             try {
                 BufferedImage img = ImageIO.read(from);
                 if (img == null) {
@@ -602,30 +597,8 @@ public class BatchSkill implements Skill {
     // ================================================================ 小工具
 
     /**
-     * 资源判定（ACL）：批量改名 / 转格式碰的是文件 → 判<b>传进来那个路径</b>的写位。
-     *
-     * <p><b>调用点传的是"这一个目标"</b>：{@code rename} 的写前循环判 `from` 与 `to`，
-     * {@code convert} 的写前循环判目标图 `to1` —— 所以"路径本身属于哪一类"直接决定结果：
-     * {@code files/} 树属 C、无专有位 ⇒ 非主人只有 {@code R}（拿不到 W）；数据根里别处是 B 类
-     * （{@code ALLUSER} 无位）⇒ 非主人判不过；数据根外是 A 类（{@code ALLUSER} 默认一位都不给）。
-     * 主人 {@code RWX}、她自己的自主行为 {@code SYSTEM} 的 B 类是 {@code R|W}，照常。</p>
-     *
-     * <p><b>不再判"数据根"那一道</b>：数据根是 B 类 ⇒ 判它等于把 {@code files/} 里的目标一并否掉
-     * （{@code files/} 属 C、无专有位 ⇒ 非主人只有 {@code R}，写不进也改不动）。整批的准入由此改成"逐目标"，判不过只让<b>那一个</b>目标失败，
-     * 拒绝原文照样收进结果。</p>
+     * 越界拒绝：明确回一句拒绝（不是"忽略"，也不是"空结果"）。
      */
-    private static String check(Host h, File f) {
-        if (h == null) return null;
-        return h.needPath(f, 'W');
-    }
-
-    /** 读一个根内文件（转格式要先把源图读进内存）→ 判这个路径的读位（B:R）。 */
-    private static String checkRead(Host h, File f) {
-        if (h == null) return null;
-        return h.needPath(f, 'R');
-    }
-
-    /** 越界拒绝：明确回一句拒绝（不是"忽略"，也不是"空结果"）。 */
     private static String outside(Cfg c, String path) {
         return msg(c, "文案-越界", "deny.outside path={path}",
                 "{path}", Str.cut(Str.nz(path), 160));

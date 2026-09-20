@@ -30,20 +30,19 @@ import sair.v4.store.Store;
  * 发出成功才 {@code uses+1}。</p>
  *
  * <p>{@code on_timer} 做 TTL：超龄（{@code 保持天数}）与超上限（{@code 最多张数}）清理，
- * 用 kv {@code sticker:cleanup:last} 节流（{@code 清理间隔小时}），删之前再过一次归属硬判
- * （清理是她自己的维护动作，主体是 SYSTEM ⇒ 放行）。阈值与一切文案都读同目录的 {@code prompt.md}。</p>
+ * 用 kv {@code sticker:cleanup:last} 节流（{@code 清理间隔小时}）；钩子的判定主体是 SYSTEM
+ * （她自己的维护动作），照旧在入口判一次本技能的 op（恒放行）。阈值与一切文案都读同目录的 {@code prompt.md}。</p>
  *
- * <h3>归属（硬判，不是权限位）</h3>
- * <p>库是<b>全局共享</b>的（{@code sticker} 表的行里没有"谁的库"这个键），
- * 而 C 类对非主人只有 {@code R}（{@code RWX} 只有 {@code SYSTEM} 有）⇒ {@code h.needDb("sticker", 'W')} 对非主人一律拦下。
- * 所以三个写动作里各有一条显式归属判：</p>
+ * <h3>权限：每个动作各判自己的 op + 归属硬判</h3>
+ * <p>五个动作（{@code send} / {@code collect} / {@code list} / {@code remark} / {@code clear}）在各自分支开头
+ * 判自己的 op（技能管控表：空 = 未授权 = 不可用），判不过就把基板的拒绝原文原样回给模型。</p>
+ * <p>库是<b>全局共享</b>的（{@code sticker} 表的行里没有"谁的库"这个键），所以 op 判定之外还有一道
+ * <b>归属硬判</b>（它回答的是"这是不是你的数据"，不是"这个动作给不给他用"）：</p>
  * <ul>
- *   <li>{@code collect}（收表情）本意对非主人开放，但 C 类的 W 位对非主人一律拦下（要特例放行）；
- *       只有"改<b>别人收的</b>条目"这一支（同 hash 命中别人写的行）才拒 —— 按行里的
- *       {@code extra.added_by} 判归属；</li>
+ *   <li>{@code collect}（收表情）本意对非主人开放，只是"改<b>别人收的</b>条目"这一支（同 hash 命中别人写的行）拒
+ *       —— 按行里的 {@code extra.added_by} 判归属；</li>
  *   <li>{@code remark}（改语境/备注）与 {@code clear}（清空整库）非主人一律拒
- *       （旧档位表里 {@code 表情包.sticker.clear} = MASTER，口径不变；实现上 {@code MASTER} 与她本人
- *       {@code SYSTEM} 都放行，见 {@link #ownerDeny}）。</li>
+ *       （实现上 {@code MASTER} 与她本人 {@code SYSTEM} 都放行，见 {@link #ownerDeny}）。</li>
  * </ul>
  * <p>拒绝文案以 {@code [权限阻断]} 开头（结构前缀，不是 prompt.md 文案）。</p>
  */
@@ -59,13 +58,20 @@ public class StickerSkill implements Skill, Hooked {
     private static final String KV_LAST = "sticker:cleanup:last";
     /** 上轮清理状态（JSON）。 */
     private static final String KV_STATUS = "sticker:cleanup:status";
-    /** OneBot 动作名（档位一律查基板）。 */
-    private static final String ACT_GROUP = "send_group_msg";
-    private static final String ACT_PRIVATE = "send_private_msg";
     /** 一次批量删除的条数（结构性常量）。 */
     private static final int BATCH = 200;
     /** 清空的兜底轮数（防止"删不掉又列得出来"时死循环）。 */
     private static final int CLEAR_ROUNDS = 200;
+
+    /** 本技能全部 op（一个动作一条）：装载期声明，技能管控表就是按这些名字放行或封禁的。 */
+    @Override
+    public void declareOps(sair.v4.auth.OpList ops) {
+        ops.add("sticker", "send", "按语境发一张表情包");
+        ops.add("sticker", "collect", "收藏一张表情包");
+        ops.add("sticker", "list", "列表情包库");
+        ops.add("sticker", "remark", "改某张的语境 / 备注");
+        ops.add("sticker", "clear", "清空表情包库");
+    }
 
     // ================================================================ 库声明（装载期）
 
@@ -123,6 +129,12 @@ public class StickerSkill implements Skill, Hooked {
         //   一并删干净；而 StickerCollect.capture 本身也已停用（恒 return）⇒ **双保险**：
         //   md 不声明 + 这里不调用 + 被调方恒 return，三层都断，不留任何"能被误调用"的路。
         if (!"on_timer".equals(hook)) return;                        // 只认 on_timer，其余钩子直接不管
+        // 钩子（她自己的维护动作）：判定主体是 SYSTEM ⇒ h.need 恒放行；照旧写这一句，口径统一。
+        String deny = h.need("sticker");
+        if (deny != null) {
+            log(h, "on_timer 跳过（本技能没被授权）：" + deny);
+            return;
+        }
         // ★ 收集段（在现有 TTL 之前）：消费看图手写在 kv 里的候选行（sticker:cand/）→ 下载 →
         //   内容去重 → 入库 → 磁盘账。这条路**一次视觉调用都没有**（判定来自候选行，不再有视觉审查）。
         try {
@@ -141,13 +153,14 @@ public class StickerSkill implements Skill, Hooked {
 
     /** 按语境挑一张，发到当前会话。 */
     private static String send(Args a, Host h, Cfg c) {
+        // 技能管控表：这个动作自己的 op —— 判不过就把拒绝原文原样回给模型，一张图都不发。
+        String deny = h.need("sticker.send");
+        if (deny != null) return deny;
         Caller me = h.caller();
         boolean group = me != null && me.toGroup();
         long to = group ? me.groupId() : (me == null || me.isConsole() ? 0L : me.qq());
         if (to <= 0L) return msg(c, "无会话", "no_session");
 
-        String deny = check(h, group ? ACT_GROUP : ACT_PRIVATE);
-        if (deny != null) return deny;
         if (!h.napcatConnected()) return Api.NOT_CONNECTED;
 
         Store store = h.store();
@@ -249,15 +262,14 @@ public class StickerSkill implements Skill, Hooked {
         return out;
     }
 
-    // ================================================================ 归属硬判（不是权限位）
+    // ================================================================ 归属硬判（与 op 判定是两件事）
 
     /**
      * "只有主人或她本人能做的写动作"的硬判（{@code remark} / {@code clear}）：{@code MASTER} 与
      * {@code SYSTEM}（她自己的自主维护）放行，{@code ALLUSER} 一律拒。
      *
-     * <p>库是全局共享的（表里没有归属键），而 C 类（{@code sticker}）对非主人只有 {@code R}（{@code RWX} 只有 {@code SYSTEM} 有）⇒
-     * {@code h.needDb("sticker",'W')} 对非主人一律拦下（非主人写一律被位拦下）。
-     * 所以"谁能不能清库 / 改库里的条目"必须在这里显式判身份。</p>
+     * <p>库是全局共享的（表里没有归属键）⇒ "谁能不能清库 / 改库里的条目"必须在 op 判定之外显式判身份：
+     * op 只回答"这个动作给不给他用"，回答不了"这会动到谁的数据"。</p>
      *
      * <p><b>文案要跟这条判对齐</b>：{@code SYSTEM} 也放行 ⇒ 拒绝文案不能写成"仅主人"，
      * 要如实写成"只能由主人或她本人（MASTER/SYSTEM）做"（写窄了就是假话）。</p>
@@ -298,10 +310,10 @@ public class StickerSkill implements Skill, Hooked {
 
     /** 收藏一张：hash 相同就只更新语境/备注（不重复堆）。 */
     private static String collect(Args a, Host h, Cfg c) {
-        // 资源判定（ACL）：收藏 = 往 sticker 库写（C:W）。C 类对非主人只有 R（RWX 只有 SYSTEM 有）⇒ 这一判对非主人一律拦下，
-        // 所以"非主人也允许 collect"这个本意要特例放行才成立（收表情是正常用法）；能不能改某一条，
-        // 由下面按 extra.added_by 的归属硬判回答，不靠这一判。
-        String deny = h.needDb(LIB, 'W');
+        // 技能管控表：这个动作自己的 op —— 判不过就不写库。
+        // "非主人也允许 collect"这个口径现在就写在管控表里（给 collect 一行 Run），不需要别的特例；
+        // 能不能改某一条，由下面按 extra.added_by 的归属硬判回答，不靠这一判。
+        String deny = h.need("sticker.collect");
         if (deny != null) return deny;
         String file = Str.trim(a.str("file"));
         if (file.isEmpty()) return msg(c, "缺文件", "missing_file");
@@ -353,7 +365,7 @@ public class StickerSkill implements Skill, Hooked {
 
     /** 看库里有什么（可按语境过滤）。 */
     private static String list(Args a, Host h, Cfg c) {
-        String deny = h.needDb(LIB, 'R');              // 读 sticker 库（C:R，默认位就够读）
+        String deny = h.need("sticker.list");          // 列库 = 这个动作自己的 op
         if (deny != null) return deny;
         Store store = h.store();
         if (store == null) return msg(c, "异常", "error={error}", "{error}", "store=null");
@@ -385,15 +397,15 @@ public class StickerSkill implements Skill, Hooked {
 
     /** 按 hash（支持前几位）或 id 改语境/备注。 */
     private static String remark(Args a, Host h, Cfg c) {
-        // 归属硬判（隔离手段，不是权限位）：改库里的条目 = 改一份全局共享的数据，非主人一律拒。
+        // 技能管控表：这个动作自己的 op —— 判不过就一个字节都不改。
+        String deny = h.need("sticker.remark");
+        if (deny != null) return deny;
+        // 归属硬判（隔离手段，与 op 判定是两件事）：改库里的条目 = 改一份全局共享的数据，非主人一律拒。
         // 文案如实点名"谁能做"：ownerDeny 对 MASTER 与 SYSTEM 都放行（她自己的自主维护也走这条路），
         // 所以这里不写"仅主人"—— 写了就是文案比行为窄。
         String owner = ownerDeny(h,
                 "[权限阻断] 改表情包的语境/备注只能由主人或她本人（MASTER/SYSTEM）做。");
         if (owner != null) return owner;
-        // 资源判定（ACL）：改语境 = 写 sticker 库（C:W；C 类对非主人只有 R（RWX 只有 SYSTEM 有）⇒ 非主人写一律被位拦下）
-        String deny = h.needDb(LIB, 'W');
-        if (deny != null) return deny;
         String hash = Str.trim(a.str("hash"));
         long id = a.l("id", 0L);
         if (!Str.has(hash) && id <= 0L) return msg(c, "缺标记", "missing_mark");
@@ -433,15 +445,16 @@ public class StickerSkill implements Skill, Hooked {
 
     // ================================================================ op：clear
 
-    /** 清空整库（写 sticker 库 = C:W；旧档位里 {@code 表情包.sticker.clear} = MASTER，口径不变：非主人拒）。 */
+    /** 清空整库（op = {@code sticker.clear}：非主人拒，主人与她本人放行）。 */
     private static String clear(Args a, Host h, Cfg c) {
-        // 归属硬判（隔离手段，不是权限位）：清空是"整库级"的破坏性写，非主人一律拒。
+        // 技能管控表：这个动作自己的 op —— 判不过就一张都不删。
+        String deny = h.need("sticker.clear");
+        if (deny != null) return deny;
+        // 归属硬判（隔离手段，与 op 判定是两件事）：清空是"整库级"的破坏性写，非主人一律拒。
         // 文案如实点名"谁能做"（MASTER 与 SYSTEM 都放行），不写"仅主人"。
         String owner = ownerDeny(h,
                 "[权限阻断] 清空表情包库只能由主人或她本人（MASTER/SYSTEM）做。");
         if (owner != null) return owner;
-        String deny = h.needDb(LIB, 'W');
-        if (deny != null) return deny;
         Store store = h.store();
         if (store == null) return msg(c, "异常", "error={error}", "{error}", "store=null");
         int n = 0;
@@ -471,10 +484,10 @@ public class StickerSkill implements Skill, Hooked {
         long last = num(store.kv(KV_LAST, "0"), 0L);
         if (last > 0L && c.intervalMs > 0L && now - last < c.intervalMs) return;
 
-        // 自主维护钩子（on_timer）：主体是 SYSTEM（C:RWX）→ 她自己的 TTL 清理照常；这一判只兜"库不可写"。
-        String deny = h.needDb(LIB, 'W');
+        // 自主维护钩子（on_timer）：判定主体是 SYSTEM（她自己的维护动作）⇒ h.need 恒放行；照旧写这一句。
+        String deny = h.need("sticker");
         if (deny != null) {
-            log(h, "TTL 清理跳过：" + deny);
+            log(h, "TTL 清理跳过（本技能没被授权）：" + deny);
             return;
         }
         store.kvSet(KV_LAST, String.valueOf(now));      // 先落闸门：异常也不会变成每 tick 重扫
@@ -527,11 +540,6 @@ public class StickerSkill implements Skill, Hooked {
     }
 
     // ================================================================ 小工具
-
-    /** 权限复核：平台动作一律走 ACL 的 E 类判定（E 类默认分配：MASTER 全 RWX / 她本人 SYSTEM 的 E = RWX（Acl.SYS_E = Bits.ALL） / ALLUSER 为空）。 */
-    private static String check(Host h, String action) {
-        return h.needPlatform(action);
-    }
 
     /** hash：本地存在的文件取字节 md5，否则取字符串（URL / fileid）的 md5。 */
     private static String hashOf(String file) {

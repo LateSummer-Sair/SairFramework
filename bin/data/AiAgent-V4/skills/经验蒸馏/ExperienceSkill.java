@@ -36,9 +36,9 @@ import sair.v4.store.Store;
  * <p>提技是<b>默认关闭</b>的高风险动作：只有 {@code 自动提技: on}、重要度 ≥ {@code 提技门槛}、
  * 命中次数 ≥ {@code 提技最低命中}、模型标记 {@code skill_candidate=true}、且这一条尚未提技过，
  * 才会把那一条经验按 {@code ## 提技模板} 渲染成 md + java 交给基板的 {@code skill_write}
- * （真正拦人的是 {@link #promote} 里那句<b>写技能目录的 B 位判定</b>
- * {@code h.needPath(h.conf().skillsDir(), 'W')}：技能目录在生产里落在 SFW 根下 = B 类，
- * 默认分配 {@code MASTER RWX} / {@code SYSTEM R|W} / {@code ALLUSER} 无位（∅）⇒ 非主人恒写不进）。
+ * （真正拦人的是 {@link #promote} 里那句 <b>op 判定</b> {@code h.need("skill_write.add")}：
+ * 提技 = 调 {@code skill_write} 的 {@code add} 动作写技能源码 ⇒ 按技能管控表要这个 op 的授权；
+ * {@code on_timer} 与她自己这条路的主体是 {@code SYSTEM}，恒放行）。
  * 生成的技能只做"查库 + 回话"（读 note 库里的那一条经验），不执行命令、不读写文件。</p>
  *
  * <h3>★ 她自己的标记行（P1-selfsee）：素材面（dialog + grouplog）整行跳过</h3>
@@ -72,10 +72,9 @@ public class ExperienceSkill implements Skill, Hooked {
     private static final String NAME_TPL_DEF = "exp_{slug}";
     private static final String TOOL_TPL_DEF = "exp_{slug}";
     /**
-     * 基板技能写入口。
-     * <p><b>它自己不再判权限</b>：{@code Registry.call} 之后没有工具级判定（谁调都进得来）；
-     * 拦人的是调用前那次"写技能目录的 B 位"判定（见 {@link #promote}）。
-     * 旧注释写的 "ROOT 档" 已随档位体系退休（{@code PermTable} 里那行只剩参考意义）。</p>
+     * 基板技能写入口（工具名；{@code add} 是它的动作名 ⇒ 对应的 op 是 {@code skill_write.add}）。
+     * <p>它是<b>独立于本技能</b>的另一把工具：调用前由本技能先判一次 {@code h.need("skill_write.add")}
+     * （见 {@link #promote}），{@code h.call(...)} 自己还会走一遍工具入口的 op 闸门。</p>
      */
     private static final String TOOL_SKILL_WRITE = "skill_write";
     /**
@@ -166,16 +165,51 @@ public class ExperienceSkill implements Skill, Hooked {
         try {
             String op = Str.trim(a.str("op")).toLowerCase();
             if (op.isEmpty()) op = "list";
-            if ("list".equals(op)) return list(a, h);
-            if ("search".equals(op)) return search(a, h);
-            if ("add".equals(op)) return add(a, h);
-            if ("forget".equals(op)) return forget(a, h);
-            if ("run".equals(op)) return run(a, h);
+            // op 判定：五个动作各判自己的 op（技能管控表按这些名字放行/封禁），判在动作分支的开头。
+            // 判完 op 之后，写 note 的那些分支仍要过归属硬判（noteWriteGuard）—— 那是数据归属，不是权限。
+            if ("list".equals(op)) {
+                String deny = h.need("experience.list");
+                if (deny != null) return deny;
+                return list(a, h);
+            }
+            if ("search".equals(op)) {
+                String deny = h.need("experience.search");
+                if (deny != null) return deny;
+                return search(a, h);
+            }
+            if ("add".equals(op)) {
+                String deny = h.need("experience.add");
+                if (deny != null) return deny;
+                return add(a, h);
+            }
+            if ("forget".equals(op)) {
+                String deny = h.need("experience.forget");
+                if (deny != null) return deny;
+                return forget(a, h);
+            }
+            if ("run".equals(op)) {
+                String deny = h.need("experience.run");
+                if (deny != null) return deny;
+                return run(a, h);
+            }
             return "[" + NAME + "] 不支持的 op：" + op + "（只支持 list / search / add / forget / run）";
         } catch (Throwable t) {
             log(h, "工具调用异常：" + t);
             return "[" + NAME + "] 执行异常：" + t;
         }
+    }
+
+    /**
+     * 声明本技能的全部 op（技能管控表的骨架）：五个动作各一条 ——
+     * "允许他查"与"允许他删 / 跑蒸馏"因此能在管控表里分开写。
+     */
+    @Override
+    public void declareOps(sair.v4.auth.OpList ops) {
+        ops.add("experience", "list", "列最近的经验（可按关键词过滤）");
+        ops.add("experience", "search", "按关键词检索经验");
+        ops.add("experience", "add", "手工记一条经验（先查重）");
+        ops.add("experience", "forget", "按 id 删一条经验");
+        ops.add("experience", "run", "立刻跑一轮蒸馏（可能提技）");
     }
 
     // ================================================================ 钩子入口
@@ -202,8 +236,6 @@ public class ExperienceSkill implements Skill, Hooked {
     /** {@code list}：最近的几条经验（可按关键词过滤）。 */
     private static String list(Args a, Host h) {
         Cfg c = load(h);
-        String denyRead = h.needDb(LIB, 'R');          // 读 note 库（C:R）
-        if (denyRead != null) return denyRead;
         int limit = a.i("limit", c.listLimit);
         if (limit <= 0) limit = c.listLimit;
         String q = Str.trim(a.str("query"));
@@ -231,8 +263,6 @@ public class ExperienceSkill implements Skill, Hooked {
     /** {@code search}：按关键词检索经验（同样只看本技能写的行）。 */
     private static String search(Args a, Host h) {
         Cfg c = load(h);
-        String denyRead = h.needDb(LIB, 'R');          // 读 note 库（C:R）
-        if (denyRead != null) return denyRead;
         String q = Str.trim(a.str("query"));
         if (q.isEmpty()) return a.missing("query");
         int limit = a.i("limit", c.searchLimit);
@@ -279,8 +309,6 @@ public class ExperienceSkill implements Skill, Hooked {
         // 覆盖本方法里的 put、命中重复时的 bump()→update、以及提技后的 update（promote）。
         String guard = noteWriteGuard(h);
         if (guard != null) return guard;
-        String denyWrite = h.needDb(LIB, 'W');         // 写 note 库（C:W；C 类对非主人只有 R ⇒ 非主人写一律被位拦下）
-        if (denyWrite != null) return denyWrite;
         String content = Str.trim(a.str("content"));
         if (content.isEmpty()) return a.missing("content");
         String title = Str.trim(a.str("title"));
@@ -313,18 +341,15 @@ public class ExperienceSkill implements Skill, Hooked {
                 "{importance}", String.valueOf(imp)) + (Str.blank(tail) ? "" : "\n" + tail);
     }
 
-    /** {@code forget}：按 id 删（只能删本技能自己写的行 source=NAME；写 note 库 → C:W）。 */
+    /** {@code forget}：按 id 删（只能删本技能自己写的行 source=NAME）。 */
     private static String forget(Args a, Host h) {
         Cfg c = load(h);
         long id = a.l("id", 0L);
         if (id <= 0L) return a.missing("id");
         // 归属硬判：note 是共享知识库、行里没有归属列 ⇒ 非主人一律拒。
-        // （原来这里只有 needDb(W) 的权限位判定 + source==NAME 的"是不是本技能写的"判定，
-        //  两条都不表达"这是不是你的数据"。）
+        // （source==NAME 只表达"是不是本技能写的"，不表达"这是不是你的数据"。）
         String guard = noteWriteGuard(h);
         if (guard != null) return guard;
-        String deny = h.needDb(LIB, 'W');
-        if (deny != null) return deny;
         JsonObject row = h.store().get(LIB, id);
         if (row == null || !NAME.equals(J.s(row, "source", ""))) {
             return msg(c, "文案-没有这条", "not_found id={id}", "{id}", String.valueOf(id));
@@ -338,16 +363,12 @@ public class ExperienceSkill implements Skill, Hooked {
 
     /** {@code run}：立刻跑一轮蒸馏（与定时同一道闸门）。 */
     private static String run(Args a, Host h) {
-        // 归属硬判：这一路会写 note（蒸馏结果落库）—— 非主人不能借 "run" 让别人替她写共享知识库。
+        // 权限口径：调用面已判过 op experience.run（调模型、写 note 都算这一个动作的授权）。
+        // 这里只剩"是不是你的数据"——归属硬判：这一路会写 note（蒸馏结果落库），
+        // 非主人不能借 "run" 让别人替她写共享知识库。
         // 定时钩子那条路（on_timer）的主体是 SYSTEM（她自己的自主行为）⇒ 不受影响。
         String guard = noteWriteGuard(h);
         if (guard != null) return guard;
-        // run 会调模型（出网）= 执行一把工具 → T 类工具的 X 位（只判入口）。
-        String denyTool = h.need(sair.v4.auth.Res.tool("experience"), 'X');
-        if (denyTool != null) return denyTool;
-        // 蒸馏结果要落 note 库 → 同时判这一次写的位。
-        String denyWrite = h.needDb(LIB, 'W');
-        if (denyWrite != null) return denyWrite;
         // 蒸馏流水线也做"查重 → 写库"：与手工 add 共用同一把锁，避免两条路同时写进同一条经验
         synchronized (writeLock(LIB)) {
             return runLocked(a, h);
@@ -366,15 +387,13 @@ public class ExperienceSkill implements Skill, Hooked {
 
     /** 取样 → 问模型 → 查重 → 写库 →（可选）提技。返回可读结果，同时落 kv 状态。 */
     private static String round(Host h, Cfg c, String op) {
-        // 这一轮要写 note 库（C:W）+ 读 dialog/grouplog：定时钩子路径的主体是 SYSTEM（C:RWX），
-        // 所以她自己的维护不会被默认位误伤；被主人叫去跑的人按自己的位判。
-        // 注意 C 类对非主人只有 R ⇒ 非主人写一律被位拦下；"非主人不许写共享知识库"仍由 noteWriteGuard 归属硬判守住。
-        // 这里再判一次 = 兜底：round 是"写 note"的唯一汇集点（run / on_timer 两条入口都已判过，
-        // on_timer 那条的主体是 SYSTEM ⇒ 她自己的蒸馏照常）。
+        // 这一轮要写 note 库（蒸馏结果落库）+ 读 dialog/grouplog：定时钩子路径的主体是 SYSTEM
+        // （她自己的自主行为，技能管控表恒放行），所以她自己的维护照常；被主人叫去跑的人按自己的
+        // op 授权判（run 的 op 已在 call 里判过）。
+        // 剩下的只有归属："非主人不许写共享知识库"由 noteWriteGuard 归属硬判守住 ——
+        // round 是"写 note"的唯一汇集点，这里再判一次 = 兜底（on_timer 那条的主体是 SYSTEM）。
         String guardRound = noteWriteGuard(h);
         if (guardRound != null) return guardRound;
-        String denyWrite = h.needDb(LIB, 'W');
-        if (denyWrite != null) return denyWrite;
         long now = System.currentTimeMillis();
         One r = new One();
         List<JsonObject> dlg = dialogSample(h.store(), c);
@@ -559,7 +578,7 @@ public class ExperienceSkill implements Skill, Hooked {
 
     /**
      * 提技资格：配置开关开着 + 模型标了 skill_candidate + 重要度 ≥ 提技门槛 + 命中次数 ≥ 提技最低命中。
-     * 四个条件缺一不可；真正写技能前还会再过一次"写技能目录的 B 位"判定（见 {@link #promote}）。
+     * 四个条件缺一不可；真正写技能前还会再过一次 op 判定（{@code skill_write.add}，见 {@link #promote}）。
      */
     private static boolean eligible(Cfg c, int importance, boolean cand, int hits) {
         return c.autoPromote && cand && importance >= c.promoteMin && hits >= c.promoteHits;
@@ -616,11 +635,11 @@ public class ExperienceSkill implements Skill, Hooked {
 
     /**
      * 把一条经验提升成一个真技能：按 {@code ## 提技模板} 渲染 md + java，交给基板的 {@code skill_write}。
-     * 三道闸门：配置开关、<b>写技能源码的位（SFW 内文件 = B:W）</b>、以及"写完之后注册表里真的多了这个工具"才算成功。
+     * 三道闸门：配置开关、<b>op 授权（{@code skill_write.add}）</b>、以及"写完之后注册表里真的多了这个工具"才算成功。
      *
-     * <p>提技的本质是<b>往 SFW 里写一个新技能目录（md + java）</b>——那是 B 类资源：SYSTEM 有 B:{@code RW}、
-     * 主人有 {@code RWX}，其余人（{@code ALLUSER}）在 B 类一位都没有（{@code Acl.DEF_B} = 无位）
-     * ⇒ 非主人恒做不到（这条闸门因此天然"仅主人/她自己"）。</p>
+     * <p>提技的本质是<b>调 {@code skill_write} 往技能目录里写一个新技能（md + java）</b>——
+     * 所以要 {@code skill_write.add} 这个 op 的授权；她自己在 {@code on_timer} 里跑时主体是 {@code SYSTEM}
+     * （恒放行），主人也不受技能管控表影响，其余身份按账本里那几行判（没写 = 未授权 = 做不到）。</p>
      */
     private static String promote(Host h, Cfg c, long id, String title, String content, JsonObject extra, One r) {
         if (!Str.has(c.mdTpl) || !Str.has(c.javaTpl)) {
@@ -628,9 +647,9 @@ public class ExperienceSkill implements Skill, Hooked {
             if (r != null) r.promoteNote = why;
             return msg(c, "文案-提技失败", "promote_failed reason={reason}", "{reason}", why);
         }
-        String deny = h.needPath(h.conf().skillsDir(), 'W');
+        String deny = h.need("skill_write.add");
         if (deny != null) {
-            log(h, "提技被权限复核拦下：" + deny);
+            log(h, "提技被技能管控表拦下：" + deny);
             if (r != null) r.promoteNote = Str.cut(Str.oneLine(deny), 200);
             return msg(c, "文案-提技失败", "promote_failed reason={reason}", "{reason}", deny);
         }
@@ -1009,8 +1028,9 @@ public class ExperienceSkill implements Skill, Hooked {
      * 没有 per-user 归属列），所以非主人（{@code ALLUSER}）对它的<b>写/改/删一律拒</b>；
      * {@code MASTER} 与她自己的自主行为（{@code SYSTEM}，即 {@code on_timer} 那条路）照常。
      *
-     * <p><b>为什么还要归属硬判</b>：{@code note} 是 C 类资源，C 类对非主人只有 {@code R}
-     * ⇒ {@code h.needDb("note",'W')} 把非主人写一律拦下；"是不是写别人的"仍只能靠归属硬判（共享库没有归属列）。</p>
+     * <p><b>为什么还要归属硬判</b>：op（技能管控表）只回答"这个身份能不能用
+     * {@code experience.add} / {@code experience.forget} / {@code experience.run} 这个动作"，
+     * 回答不了"这一条是不是他的"（共享库没有归属列）—— 归属问题由这一判回答。</p>
      */
     private static String noteWriteGuard(Host h) {
         if (!restricted(h)) return null;
@@ -1018,7 +1038,7 @@ public class ExperienceSkill implements Skill, Hooked {
     }
 
     /**
-     * 受限主体判定（ACL 之后的新口径）：受限的只有 {@code ALLUSER}（普通用户）。
+     * 受限主体判定（新口径）：受限的只有 {@code ALLUSER}（普通用户）。
      * <p>{@code MASTER} / {@code SYSTEM} 照常放行；身份取不到时按受限处理（fail-closed）。</p>
      */
     private static boolean restricted(Host h) {

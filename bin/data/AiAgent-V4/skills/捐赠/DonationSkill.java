@@ -31,9 +31,11 @@ import sair.v4.store.Store;
  * {@code reset}（清空台账）。金额排序在 Java 侧按数值做
  * （{@code value} 是文本列，直接 ORDER BY 会按字典序排）。文案/键名/阈值全在 {@code prompt.md}。</p>
  *
- * <p><b>归属口径（ACL 之后的新口径 —— 与权限位无关）</b>：{@code MASTER}/{@code SYSTEM} 照常；
+ * <p><b>归属口径（与授权无关）</b>：{@code MASTER}/{@code SYSTEM} 照常；
  * 受限的只有 {@code ALLUSER} —— ① <b>给别人记账</b>一律拒（见 {@link #add}）；
- * ② <b>清空台账</b>一律拒（见 {@link #reset}）。给自己记账不受影响。</p>
+ * ② <b>清空台账</b>一律拒（见 {@link #reset}）。给自己记账不受影响。
+ * 这两个是<b>业务归属硬判</b>，与技能管控表（op）各管一段：op 管"这个身份能不能用这个动作"，
+ * 归属硬判管"这个动作能不能碰这个人的数据"。</p>
  */
 public class DonationSkill implements Skill {
 
@@ -52,6 +54,16 @@ public class DonationSkill implements Skill {
     private static final String DENY = "[权限阻断] ";
 
     // ================================================================ 工具入口
+
+    /**
+     * 声明本技能的三个 op（技能管控表就是按这些名字放行或封禁的）。
+     */
+    @Override
+    public void declareOps(sair.v4.auth.OpList ops) {
+        ops.add("donation", "add", "记一笔捐赠");
+        ops.add("donation", "list", "看捐赠榜与总计");
+        ops.add("donation", "reset", "清空捐赠台账");
+    }
 
     @Override
     public Object call(Args a, Host h) {
@@ -75,7 +87,8 @@ public class DonationSkill implements Skill {
 
     /** 记一笔：给某人累加金额与笔数，同时累加总计。 */
     private static String add(Args a, Host h, Store s, Cfg c) {
-        String deny = check(h, 'W');
+        // 这个动作分支的 op 判定（技能管控表：op 放行才动手）
+        String deny = h.need("donation.add");
         if (deny != null) return deny;
         long caller = qq(h);
         long target = a.l("qq", 0L);
@@ -83,14 +96,9 @@ public class DonationSkill implements Skill {
         if (target <= 0L) return a.missing("qq");
         if (target != caller && restricted(h)) {
             // 归属硬判：给别人记账 = 改别人的账目 —— 非主人（ALLUSER）一律拒。
-            // 原来这里是 check(h,'W')（pref 库写位），那时 C 类默认位是 RWX ⇒ 恒放行 ⇒ 谁都能给别人记账；现在 C 类对非主人只有 R，非主人写一律被位拦下（这道硬判照旧保留）。
+            // 这一条是**业务判断**（改的是不是别人的账），与 op 判定各管一段，照旧保留。
             // 给自己记账不受影响（target == caller 走不到这里）。
             return DENY + "只能给自己记账（目标 " + target + " 不是你自己）。";
-        }
-        if (target != caller) {
-            // 保留原权限位判定：它表达"这一类资源要能写"（MASTER / SYSTEM 走这里）。
-            String other = check(h, 'W');
-            if (other != null) return other;
         }
         String raw = Str.trim(a.str("amount"));
         if (raw.isEmpty()) return a.missing("amount");
@@ -169,7 +177,8 @@ public class DonationSkill implements Skill {
 
     /** 榜：按累计金额从高到低（Java 侧按数值排），末尾给一行总计。 */
     private static String list(Args a, Host h, Store s, Cfg c) {
-        String deny = check(h, 'R');
+        // 这个动作分支的 op 判定（技能管控表：op 放行才动手）
+        String deny = h.need("donation.list");
         if (deny != null) return deny;
         int limit = a.i("limit", atLeast(P(c, "榜单条数", "10"), 1, 200));
         if (limit <= 0) limit = atLeast(P(c, "榜单条数", "10"), 1, 200);
@@ -230,9 +239,10 @@ public class DonationSkill implements Skill {
     /**
      * 清空台账（含总计）：<b>归属硬判 = 非主人（{@code ALLUSER}）一律拒</b>。
      *
-     * <p>为什么必须有这一条：原来的闸门只有 {@code check(h,'W')}（{@code pref} 库的写位）——
-     * 而 {@code pref} 是 C 类资源、旧口径下 ACL 里 C 的默认位是 {@code RWX} ⇒ 它对谁都是放行（现在 C 类对非主人只有 {@code R}、非主人写一律被位拦下），
-     * 于是那句"仅主人"的注释与行为脱钩，任何 {@code ALLUSER} 都能清空整本捐赠台账。</p>
+     * <p>为什么必须有这一条：技能管控表管的是"这个身份能不能用 {@code donation.reset} 这个 op"，
+     * 它说不了"这本台账是不是你的" —— 台账是全机器人一本账、行里没有归属列，
+     * 所以除了 op 判定之外还必须有这道归属硬判，否则任何被放行过 {@code donation.reset}
+     * 的 {@code ALLUSER} 都能清空整本捐赠台账。</p>
      *
      * <p>口径与本批其它技能一致：{@code MASTER}（主人）与 {@code SYSTEM}（她自己的自主行为）
      * 照常放行 —— 拿不到身份（{@code caller == null}）时按受限处理（fail-closed）。
@@ -242,9 +252,10 @@ public class DonationSkill implements Skill {
      * "主人或她本人（MASTER/SYSTEM）"，<b>不许写"仅主人"</b>（那是假话 —— 探针按这一点断言）。</p>
      */
     private static String reset(Args a, Host h, Store s, Cfg c) {
-        if (restricted(h)) return DENY + "清空捐赠台账只能由主人或她本人（MASTER/SYSTEM）做。";
-        String deny = check(h, 'W');
+        // 这个动作分支的 op 判定（技能管控表：op 放行才动手）
+        String deny = h.need("donation.reset");
         if (deny != null) return deny;
+        if (restricted(h)) return DENY + "清空捐赠台账只能由主人或她本人（MASTER/SYSTEM）做。";
         String pkey = P(c, "键前缀", PREFIX_DEF);
         List<JsonObject> all = s.list(LIB, J.obj("_like", J.obj("key", pkey)), atLeast(P(c, "取样条数", "500"), 10, 5000), null);
         int n = 0;
@@ -364,21 +375,9 @@ public class DonationSkill implements Skill {
     // ================================================================ 小工具
 
     /**
-     * 资源判定（ACL）：捐款账目落在 {@code pref} 库（C 类）—— 读判 {@code R}、写判 {@code W}。
-     *
-     * <p><b>现在位就拦得住"非主人给别人记账"</b>：{@code pref} 是 C 类资源，ACL 里 C 类对非主人只有 {@code R}
-     * ⇒ 非主人写一律被位拦下。归属仍由 {@link #restricted} 在 {@code add} 里硬判（{@code target != caller} 且非主人 → 拒），这道硬判照旧保留。</p>
-     *
-     * @param bit {@code 'R'} 读 / {@code 'W'} 写
-     */
-    private static String check(Host h, char bit) {
-        if (h == null) return null;
-        return h.needDb(LIB, bit);
-    }
-
-    /**
-     * 受限主体判定（ACL 之后的新口径）：受限的只有 {@code ALLUSER}（普通用户）。
-     * <p>{@code MASTER} / {@code SYSTEM}（她自己的自主行为）照常放行；身份取不到时按受限处理（fail-closed）。</p>
+     * 受限主体判定：受限的只有 {@code ALLUSER}（普通用户）。
+     * <p>{@code MASTER} / {@code SYSTEM}（她自己的自主行为）照常放行；身份取不到时按受限处理（fail-closed）。
+     * 这是 <b>业务归属硬判</b>（改的是不是别人的账 / 能不能清账），与 op 判定各管一段。</p>
      */
     private static boolean restricted(Host h) {
         try {

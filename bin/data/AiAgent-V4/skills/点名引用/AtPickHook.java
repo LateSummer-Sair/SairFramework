@@ -52,7 +52,7 @@ public class AtPickHook implements Hooked {
 
             boolean ok = AtPickMemo.push(h, e.groupId(), r, keep(c), now, ttl);
             AtPickMemo.sweep(h, now, ttl, AtPickCfg.num(c, "清理间隔秒", DEF_SWEEP_SEC) * 1000L);
-            if (!ok) log(h, "入站记账没落库（权限/库不可用？）群=" + e.groupId() + " id=" + r.id);
+            if (!ok) log(h, "入站记账没落库（库不可用？）群=" + e.groupId() + " id=" + r.id);
         } catch (Throwable t) {
             log(h, "入站记账异常（不影响这条消息）：" + t);
         }

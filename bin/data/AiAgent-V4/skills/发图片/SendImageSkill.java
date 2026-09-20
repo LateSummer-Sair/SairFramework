@@ -29,6 +29,10 @@ import sair.v4.skill.Skill;
  * <p>落点由 {@link Host#caller()} 决定（群 → 群，私聊 → 私聊），技能不改落点、不改判定。
  * NapCat 未连接时按基板口径直接回「{@link Api#NOT_CONNECTED}」。</p>
  *
+ * <p>权限：单动作工具，op 就是工具名 {@code sendimage}（技能管控表 {@code skillctl.json} 里那一行）——
+ * 没放行 = 未授权 = 不可用（`ALLUSER` 按表判；{@code MASTER} 与她本人 {@code SYSTEM} 恒全权）。
+ * 发图本身是对外动作，平台侧还有基板给 NapCat 装的那道闸门兜着。</p>
+ *
  * <p>文字渲染走 Java2D 离屏绘制（headless 可用），字体按可用性挑选，避免中文变方块。</p>
  */
 public class SendImageSkill implements Skill {
@@ -47,7 +51,16 @@ public class SendImageSkill implements Skill {
     private static final int MAX_LINES = 120;
 
     @Override
+    public void declareOps(sair.v4.auth.OpList ops) {
+        // 单动作工具：op = 工具名
+        ops.add("sendimage", "", "往当前会话发一张图（或把文字渲染成图再发）");
+    }
+
+    @Override
     public Object call(Args a, Host h) {
+        // op 判定（动作分支开头）：本工具只有一个动作，op 就是工具名 sendimage
+        String deny = h.need("sendimage");
+        if (deny != null) return deny;
         if (!h.napcatConnected()) return Api.NOT_CONNECTED;
 
         Caller c = h.caller();

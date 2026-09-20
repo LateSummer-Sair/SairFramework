@@ -36,11 +36,12 @@ import sair.v4.store.Store;
  * <p><b>文案与阈值全在 {@code prompt.md}</b>（每次调用重读，改即生效）：缺键就明确报缺键，
  * Java 里没有写死的用户文案，也没有隐藏默认阈值。</p>
  *
- * <p><b>归属口径（ACL 之后的新口径 —— 与权限位无关）</b>：{@code note} 是<b>她的共享知识库</b>
+ * <p><b>两个口径，别混</b>：① <b>op 授权</b>（技能管控表）—— 每个动作（{@code note.add} /
+ * {@code note.search} / {@code note.recent} / {@code note.delete}）在分支开头各判自己的 op，
+ * 没授权的身份一律拒；② <b>归属硬判</b>（{@link #noteWriteGuard}）—— {@code note} 是<b>她的共享知识库</b>
  * （行里只有 {@code source}，没有"这是谁的"这一列），所以 {@code add}（含同名/近似名命中的覆盖更新）
  * 与 {@code delete} 对非主人（{@code ALLUSER}）<b>一律拒</b>；{@code MASTER} 与她自己的自主行为
- * （{@code SYSTEM}）照常。{@code h.needDb("note",'W')} 把非主人写一律拦下 —— 它是 C 类资源、
- * C 类对非主人只有 {@code R}（{@code RWX} 只有 {@code SYSTEM} 有）；而"是不是写别人的"仍靠归属硬判（见 {@link #noteWriteGuard}）。</p>
+ * （{@code SYSTEM}）照常。"是不是写别人的"只有归属硬判回答得了（共享库没有归属列）。</p>
  */
 public class NoteSkill implements Skill {
 
@@ -75,6 +76,19 @@ public class NoteSkill implements Skill {
                 .idx("idx_note_title", "title"));
     }
 
+    /**
+     * 声明本技能的全部 op（技能管控表的骨架）：装载期调一次，{@code ai/perm gen} 按它把每个 op
+     * 列成一行空（未授权），主人再往要开口的那行补身份。
+     * <p>四个动作各一条 —— "允许他查"与"允许他删"因此能在管控表里分开写。</p>
+     */
+    @Override
+    public void declareOps(sair.v4.auth.OpList ops) {
+        ops.add(TOOL, "add", "记一条笔记（同名/近似标题覆盖更新）");
+        ops.add(TOOL, "search", "按关键词检索笔记");
+        ops.add(TOOL, "recent", "列最近的几条笔记");
+        ops.add(TOOL, "delete", "按 id 删一条笔记");
+    }
+
     @Override
     public Object call(Args a, Host h) {
         if (h == null || h.store() == null) return "[" + TOOL + "] 拿不到六库接口，技能不可用。";
@@ -83,21 +97,34 @@ public class NoteSkill implements Skill {
         Store store = h.store();
         String op = Str.trim(a.str("op")).toLowerCase();
         if (op.isEmpty()) op = "search";
-        // 资源判定（ACL）：碰哪个资源就在那一刻判 —— add/delete 写 note 库（C:W），search/recent 读（C:R）。
-        // 一个 op 只碰这一类资源，所以在分派处判一次即可。
-        // 注意：C 类对非主人只有 R ⇒ 这一条把非主人写一律拦下，它<b>不</b>表达"这是不是你的数据"；
-        // 归属硬判在下面（add / delete 两个写 op）以及 delete() 内部各判一次（见 noteWriteGuard）。
-        String deny = h.needDb(LIB, ("add".equals(op) || "delete".equals(op)) ? 'W' : 'R');
-        if (deny != null) return deny;
-        // 归属硬判（写/删两个 op 在这里一次判掉）：note 是她的共享知识库、行里没有归属列 —— 非主人一律拒。
-        if ("add".equals(op) || "delete".equals(op)) {
+        // op 判定：四个动作各判自己的 op（技能管控表按这些名字放行/封禁），判在动作分支的开头。
+        // 判完 op 之后还有"归属硬判"（add / delete 是写她的共享知识库）—— 那是数据归属，不是权限。
+        if ("add".equals(op)) {
+            String deny = h.need("note.add");
+            if (deny != null) return deny;
             String guard = noteWriteGuard(h);
             if (guard != null) return guard;
+            return add(a, c, store);
         }
-        if ("add".equals(op)) return add(a, c, store);
-        if ("search".equals(op)) return search(a, c, store);
-        if ("recent".equals(op)) return recent(a, c, store);
-        if ("delete".equals(op)) return delete(a, c, store, h);
+        if ("search".equals(op)) {
+            String deny = h.need("note.search");
+            if (deny != null) return deny;
+            return search(a, c, store);
+        }
+        if ("recent".equals(op)) {
+            String deny = h.need("note.recent");
+            if (deny != null) return deny;
+            return recent(a, c, store);
+        }
+        if ("delete".equals(op)) {
+            String deny = h.need("note.delete");
+            if (deny != null) return deny;
+            // 归属硬判（写/删都在这里判一次；delete() 内部还会再判一次，见 noteWriteGuard）：
+            // note 是她的共享知识库、行里没有归属列 —— 非主人一律拒。
+            String guard = noteWriteGuard(h);
+            if (guard != null) return guard;
+            return delete(a, c, store, h);
+        }
         return c.t("不支持op", "op", op);
     }
 
@@ -345,8 +372,9 @@ public class NoteSkill implements Skill {
      * 没有 per-user 归属列），所以非主人（{@code ALLUSER}）对它的<b>写/改/删一律拒</b>；
      * {@code MASTER} 与她自己的自主行为（{@code SYSTEM}）照常。
      *
-     * <p><b>为什么还要归属硬判</b>：{@code note} 是 C 类资源，C 类对非主人只有 {@code R}
-     * ⇒ {@code h.needDb("note",'W')} 把非主人写一律拦下；但"是不是写别人的"仍只能靠归属硬判（共享库没有归属列）。</p>
+     * <p><b>为什么还要归属硬判</b>：op（技能管控表）只回答"这个身份能不能用
+     * {@code note.add} / {@code note.delete} 这个动作"，回答不了"这一条是不是他的"
+     * （共享库没有归属列）—— 归属问题由这一判回答。</p>
      *
      * <p><b>为什么判定用身份而不是按行打标记</b>：按调用者给行打标记再按标记判归属要动 {@code note}
      * 的 schema（线上已有真实数据）= 迁移，属于另一批；这一批先按"共享库 = 只有主人和她自己能写"的窄口径。</p>
@@ -357,7 +385,7 @@ public class NoteSkill implements Skill {
     }
 
     /**
-     * 受限主体判定（ACL 之后的新口径）：受限的只有 {@code ALLUSER}（普通用户）。
+     * 受限主体判定（新口径）：受限的只有 {@code ALLUSER}（普通用户）。
      * <p>{@code MASTER} / {@code SYSTEM} 照常放行；身份取不到时按受限处理（fail-closed）。</p>
      */
     private static boolean restricted(Host h) {

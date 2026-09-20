@@ -14,19 +14,25 @@ import sair.v4.skill.Skill;
 /**
  * 天气查询（工具 {@code weather}）：wttr.in 的 {@code format=j1} JSON 接口，返回温度 / 天气 / 湿度 / 风。
  * <p>失败（没网、超时、城市不存在、返回非 JSON）一律给一句明确说明，不抛异常。</p>
- * <p>权限与同族的「联网搜索」同形：出网查询判 {@code Res.tool("weather")} 的 X 位（T 类工具的运行时形态）；
- * ALLUSER 默认 {@code T=无} ⇒ 非主人用不了这把工具，要特例放行（可被账本例外放开的位判定）。</p>
+ * <p>权限与同族的「联网搜索」同形：单动作工具，op 就是工具名 {@code weather}（技能管控表
+ * {@code skillctl.json} 里那一行）—— 没放行 = 未授权 = 不可用；{@code MASTER} 与她本人（{@code SYSTEM}）
+ * 恒全权，{@code ALLUSER} 按表判（{@code Run} 放行 / {@code Ban} 或空 = 不可用）。</p>
  */
 public class WeatherSkill implements Skill {
 
     @Override
+    public void declareOps(sair.v4.auth.OpList ops) {
+        // 单动作工具：op = 工具名
+        ops.add("weather", "", "查天气");
+    }
+
+    @Override
     public Object call(Args a, Host h) {
-        // 出网查询 = 执行一把工具（工具的运行时形态是 T 类资源）→ 判这个工具的 X 位，
-        // 与同族的「联网搜索」（SearchSkill）同一个资源名、同一个位，两族保持同形。
-        // ALLUSER 默认 T=无 ⇒ 非主人用不了这把工具，要特例放行（可被账本例外放开的位判定）；
+        // op 判定（动作分支开头）：本工具只有一个动作，op 就是工具名 weather。
+        // 没放行（管制表里空 = 未授权 / Ban）= 拒，拒文原样回给模型；
         // 主人与她自己的自主行为（SYSTEM）照常。
         if (h != null) {
-            String deny = h.need(sair.v4.auth.Res.tool("weather"), 'X');
+            String deny = h.need("weather");
             if (deny != null) return deny;
         }
         String city = Str.trim(a.str("city"));

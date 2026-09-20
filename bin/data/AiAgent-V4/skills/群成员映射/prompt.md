@@ -66,8 +66,8 @@
 
 # 数据从哪来（只读，绝不写）：
 #   ① 群成员表：h.napcat().call("get_group_member_list", {"group_id": 群号}) → data[]。
-#      这是**带权限闸门**的接口：get_group_member_list 属 E 类（对外）动作，判它的 X 位
-#      （MASTER 恒全权、SYSTEM E=RWX、ALLUSER 默认 E 无；例外条目在数据根 perms.json v3），
+#      这是**带闸门**的接口：每次调用按动作自己的 op（napcat.get_group_member_list）过技能管控表
+#      （空 = 未授权 = 不可用；MASTER 与她本人 SYSTEM 恒全权，不受管控表影响），
 #      拿不到数据时返回的是 [权限阻断] … / Napcat 没有连接 这类文本 ——
 #      本插件一律当"拿不到"处理（返回空串，这一段不出现），不抛异常、不重试轰炸。
 #   ② 跨群昵称：插件自己的内存（被动累积：每次真查到一批群成员，就记下 QQ → 最近一次的称呼）。

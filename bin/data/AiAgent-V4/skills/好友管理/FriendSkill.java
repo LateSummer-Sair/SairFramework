@@ -23,10 +23,11 @@ import sair.v4.skill.Skill;
 /**
  * 好友管理（工具 {@code friend}）：好友列表 / 用户资料 / 机器人自身账号 + 机器人自己的动作。
  *
- * <p>权限：md 里的 {@code permission} 只决定"能不能看见这个工具"；每个 op 在发动作前
- * 用 {@code h.needPlatform(action)} 复核一次（ACL 的 E 类判定，非主人被拒）。
- * 旧口径里"某动作 = ROOT / 某动作 = {@code AFFECTION:N}"的档位条目已随档位体系退休 ——
- * 现在只剩"能不能拿到这个平台动作的 E 位"，好感度不参与判权。</p>
+ * <p>权限：工具是她的手段，能不能用<b>只看技能管控表</b>（{@code skillctl.json}）——
+ * 每个 op 各判自己那一行（{@code friend.list} / {@code friend.info} / …），判定放在动作分支开头；
+ * 真正的平台动作还有一层：发动作前用 {@code h.need("napcat.<动作名>")} 复核一次
+ * （NapCat 动作的 op 名 = {@code napcat.<动作名>}）。旧口径里"某动作 = ROOT / 某动作 = {@code AFFECTION:N}"
+ * 的档位条目已随档位体系退休 —— 现在只剩"这个身份能不能用这个 op"，好感度不参与判权。</p>
  *
  * <p>文案 / 阈值 / 输出模板全在 {@code prompt.md}（运行期读，改即生效）；
  * NapCat 未连接时动作返回基板话术「Napcat 没有连接」，异常一律吞掉并给出说明。</p>
@@ -42,9 +43,10 @@ import sair.v4.skill.Skill;
  * </ul>
  * <p>{@code blocklist} 是本地那一套的读取口（NapCat 侧看不到本地名单，没有它主人就不知道拉黑了谁）。</p>
  *
- * <h3>拉黑这一套的归属硬判（不是权限位）</h3>
+ * <h3>拉黑这一套的归属硬判（不是 op 判定）</h3>
  * <p>本地黑名单是<b>全局共享</b>的一份名单（键里只有"被拉黑的人"，没有"谁拉的"这一维度），
- * 而 C 类（{@code kv}）对非主人只有 {@code R}（写被位拦下）⇒ {@code h.needDb} 拦得住普通用户的写，归属硬判仍然保留。所以：</p>
+ * 所以除了技能管控表的 op 授权之外，另有一道归属硬判（代码里的显式身份判定，见 {@link #ownerDeny}）。
+ * 所以：</p>
  * <ul>
  *   <li>{@link #block}（{@code block} / {@code unblock}）非主人一律拒 —— 在本地写入<b>之前</b>返回；</li>
  *   <li>{@link #blocklist}（读名单）与它<b>一体</b>：非主人同样拒，且拒绝文案里不带任何名单内容
@@ -59,8 +61,21 @@ public class FriendSkill implements Skill {
     /** 本地黑名单的 kv 键前缀：与基板入站网关共用同一个常量（键名漂移 = 拉黑了却不生效）。 */
     private static final String BLOCK_PREFIX = QqGateway.BLOCK_PREFIX;
 
-    /** 本地黑名单落在通用 kv 表（C 类运行时数据）—— 资源判定用的库名。 */
-    private static final String LIB_KV = "kv";
+    @Override
+    public void declareOps(sair.v4.auth.OpList ops) {
+        // 每个动作各一条：技能管控表就是按这些名字放行 / 封禁的
+        ops.add("friend", "list", "看好友列表");
+        ops.add("friend", "info", "查某人资料（陌生人 / 群成员）");
+        ops.add("friend", "delete", "删好友");
+        ops.add("friend", "block", "拉黑（本地黑名单 + 尽力发平台动作）");
+        ops.add("friend", "unblock", "解除拉黑");
+        ops.add("friend", "blocklist", "看本地黑名单有谁");
+        ops.add("friend", "like", "点赞");
+        ops.add("friend", "self", "看机器人自己的账号");
+        ops.add("friend", "poke", "戳一戳");
+        ops.add("friend", "rename", "改机器人自己的昵称");
+        ops.add("friend", "signature", "改机器人自己的个性签名");
+    }
 
     @Override
     public Object call(Args a, Host h) {
@@ -99,6 +114,9 @@ public class FriendSkill implements Skill {
 
     /** 好友列表：{@code get_friend_list}。 */
     private String list(Cfg c, Host h) {
+        // op 判定（动作分支开头）：看好友列表 = friend.list
+        String deny = h.need("friend.list");
+        if (deny != null) return deny;
         R r = act(h, "get_friend_list", new JsonObject());
         if (r.deny != null) return denied(c, r.deny);
         if (!Api.ok(r.resp)) return failed(c, "list", r.resp);
@@ -128,6 +146,9 @@ public class FriendSkill implements Skill {
 
     /** 用户资料：给了群号走 {@code get_group_member_info}（成员详情），否则 {@code get_stranger_info}。 */
     private String info(Cfg c, Args a, Host h) {
+        // op 判定（动作分支开头）：查资料 = friend.info
+        String deny = h.need("friend.info");
+        if (deny != null) return deny;
         long qq = user(a, h);
         if (qq <= 0L) return missing(c, "qq");
         long gid = a.l("group", a.l("group_id", 0L));
@@ -162,6 +183,9 @@ public class FriendSkill implements Skill {
 
     /** 机器人自己的账号信息：{@code get_login_info}。 */
     private String self(Cfg c, Host h) {
+        // op 判定（动作分支开头）：看自己的账号 = friend.self
+        String deny = h.need("friend.self");
+        if (deny != null) return deny;
         R r = act(h, "get_login_info", new JsonObject());
         if (r.deny != null) return denied(c, r.deny);
         if (!Api.ok(r.resp)) return failed(c, "self", r.resp);
@@ -176,8 +200,11 @@ public class FriendSkill implements Skill {
 
     // ---------------------------------------------------------------- 机器人自身动作
 
-    /** 删除好友：{@code delete_friend}（E 类平台动作，非主人被拒）。 */
+    /** 删除好友：{@code delete_friend}（平台动作，非主人被拒）。 */
     private String delete(Cfg c, Args a, Host h) {
+        // op 判定（动作分支开头）：删好友 = friend.delete
+        String deny = h.need("friend.delete");
+        if (deny != null) return deny;
         long qq = user(a, h);
         if (qq <= 0L) return missing(c, "qq");
         R r = act(h, "delete_friend", J.obj("user_id", qq));
@@ -198,7 +225,7 @@ public class FriendSkill implements Skill {
      * <p>平台动作名从 {@code prompt.md} 读 —— NapCat 的标准动作目录里没有这一对，不同构建支持的名字不一样，
      * 所以：没配动作名 / 动作不被支持 / NapCat 没连接，都<b>不影响本地黑名单生效</b>，
      * 只把平台侧的结果原样回报（{@code {act}}）。平台动作的门槛不再由基板 {@code napcatLevel} 档位给出
-     * （档位体系已退休），而是按动作名判 ACL 的 E 类位（{@link #act}）。
+     * （档位体系已退休），而是按动作名判技能管控表里的 {@code napcat.<动作名>}（{@link #act}）。
      * 平台动作使用同一个动作名做开/关（靠 {@code enable} 参数区分；名字可分别配置）。</p>
      *
      * <p><b>谁能拉黑/解除</b>：{@code block} / {@code unblock} 都是"改一份全局共享的名单"，
@@ -206,21 +233,17 @@ public class FriendSkill implements Skill {
      * 所以被拒时本地黑名单一个字都不会动。</p>
      */
     private String block(Cfg c, Args a, Host h, boolean on) {
+        // op 判定（动作分支开头）：拉黑与解除拉黑是两个动作、各判自己的 op（共用实现，但判定分开）
+        String deny = h.need(on ? "friend.block" : "friend.unblock");
+        if (deny != null) return deny;
         long qq = user(a, h);
         if (qq <= 0L) return missing(c, "qq");
 
-        // 归属硬判（隔离手段，不是权限位）：本地黑名单是一份<b>全局共享</b>的名单
+        // 归属硬判（数据隔离手段，不是 op 判定）：本地黑名单是一份<b>全局共享</b>的名单
         // （kv 键 block:<qq> 里只有"被拉黑的人"，没有"谁拉的"这一维度），
-        // 而 C 类对非主人只有 R（写被位拦下）⇒ h.needDb("kv",'W') 拦得住普通用户的写。
-        // "非主人写一律被位拦下"这条防线回来了；归属硬判仍然保留，所以这里显式判身份：
-        // MASTER 与 SYSTEM 照常，ALLUSER 一律拒（拒绝文案以 [权限阻断] 开头）。
+        // 所以 op 授权之外还要显式判身份：MASTER 与 SYSTEM 照常，ALLUSER 一律拒（拒绝文案以 [权限阻断] 开头）。
         String owner = ownerDeny(h, on);
         if (owner != null) return owner;
-
-        // 资源判定（ACL）：本地黑名单存在通用 kv 表（C 类运行时数据）→ 判 kv 的写位。
-        // C 类对非主人只有 R（写被位拦下）⇒ 这一判也拦住非主人的写；平台动作那一步由 act() 按动作名判（E 类）。
-        String deny = h.needDb(LIB_KV, 'W');
-        if (deny != null) return denied(c, deny);
 
         // ① 本地黑名单：先落袋为安
         boolean localOk = true;
@@ -273,19 +296,18 @@ public class FriendSkill implements Skill {
      *
      * <p><b>谁能看</b>：拉黑名单与 {@code block}/{@code unblock} 一体 —— 名单里是"谁被挡在门外"，
      * 属于主人的信息，非主人一律拒（见 {@link #readOwnerDeny}）。旧的 op 级档位
-     * （{@code 好友管理.friend.blocklist} = MASTER）已随档位体系退休，而 {@code kv} 的读位
-     * （C:{@code R}）对普通用户本来就放行 ⇒ 那道门现在必须由显式归属判定承接。
+     * （{@code 好友管理.friend.blocklist} = MASTER）已随档位体系退休，而技能管控表只能表达
+     * "能不能用 {@code friend.blocklist} 这个动作" ⇒ "谁被拉黑了"这道门由显式归属判定承接。
      * 拒绝时<b>一个字节的名单内容都不回</b>（连条目数都不报），免得"拒绝"本身变成信息泄露。</p>
      */
     private String blocklist(Cfg c, Host h) {
-        // 归属硬判（隔离手段，不是权限位）：读名单同 block/unblock，非主人一律拒。
+        // op 判定（动作分支开头）：看本地黑名单 = friend.blocklist
+        String deny = h.need("friend.blocklist");
+        if (deny != null) return deny;
+        // 归属硬判（数据隔离手段，不是 op 判定）：读名单同 block/unblock，非主人一律拒。
         // 必须在读库之前返回 —— 拒绝文案里不能带任何 QQ 号，连"有几条"都不带。
         String owner = readOwnerDeny(h);
         if (owner != null) return owner;
-
-        // 资源判定（ACL）：读本地黑名单 = 读 kv 表（C:R；这一判只兜"库不可读"）
-        String deny = h.needDb(LIB_KV, 'R');
-        if (deny != null) return denied(c, deny);
 
         int cap = c.num("黑名单最多", 100);
         List<JsonObject> rows = h.store() == null ? null : h.store().kvList(BLOCK_PREFIX, cap);
@@ -325,10 +347,9 @@ public class FriendSkill implements Skill {
      * 拉黑 / 解除拉黑的<b>归属硬判</b>：{@code MASTER}（主人）与 {@code SYSTEM}（她自己的自主行为）放行，
      * {@code ALLUSER}（普通用户）一律拒。
      *
-     * <p>为什么不能靠权限位：本地黑名单是全局共享的一份名单（键 {@code block:<qq>} 只有"被拉黑的人"，
-     * 没有"谁拉的"这一维度），而 C 类（kv）对非主人只有 {@code R}（写被位拦下）⇒
-     * {@code h.needDb("kv",'W')} 拦得住普通用户的写 —— 非主人写一律被位拦下，"默认只有 {@code R}"那条
-     * 防线回来了；归属硬判仍然保留（代码里的硬判没删），它回答的是"谁能拉黑谁"。</p>
+     * <p>为什么 op 授权之外还要这一道：本地黑名单是全局共享的一份名单（键 {@code block:<qq>} 只有"被拉黑的人"，
+     * 没有"谁拉的"这一维度）—— 技能管控表只回答"能不能用 {@code friend.block} 这个动作"，
+     * 回答不了"这份名单该不该由他改"；归属硬判回答的就是后者。</p>
      *
      * <p>拒绝文案以 {@code [权限阻断]} 开头（结构前缀，不是 prompt.md 文案）：归属判定不是可配置话术。</p>
      *
@@ -353,8 +374,8 @@ public class FriendSkill implements Skill {
      * {@code ALLUSER} 一律拒。
      *
      * <p>旧的 op 级档位（{@code 好友管理.friend.blocklist} = MASTER）随档位体系退休后，
-     * 这里只剩 {@code h.needDb("kv",'R')} 兜着，而 C 类的读位对普通用户本来就放行 ——
-     * 于是"谁被拉黑了"变成人人可读。这一判就是把那道门接回来。</p>
+     * 技能管控表只管"能不能用 {@code friend.blocklist}" —— "谁被拉黑了"变成谁都能读。
+     * 这一判就是把那道门接回来。</p>
      *
      * <p><b>拒绝文案里没有任何名单内容</b>：不带 QQ 号、不带条数、不带时间/原因（连"有几条"都不报），
      * 否则"拒绝"本身就变成了信息泄露。</p>
@@ -374,12 +395,16 @@ public class FriendSkill implements Skill {
     /**
      * 戳一戳：群里用 {@code group_poke}（group_id + user_id），私聊用 {@code friend_poke}（user_id）。
      *
-     * <p>门槛不硬编码在技能里：两个动作各按动作名判 ACL 的 E 位（{@link #act}），
-     * 也就是数据根 {@code perms.json} 的账本 + 按类默认分配（E 类默认：{@code MASTER RWX} /
-     * {@code SYSTEM RWX} / {@code ALLUSER 无}）。要改只有一个入口：控制台的用户例外 / 账本
-     * （或让主人改 {@code perms.json}）；{@code skills/权限注册表.md} 只是自动生成的视图，改它无效。</p>
+     * <p>门槛不硬编码在技能里：两个动作各按动作名判（{@link #act}），也就是
+     * 技能管控表 {@code skillctl.json} 里的 {@code napcat.group_poke} / {@code napcat.friend_poke}
+     * 两行（{@code MASTER} / {@code SYSTEM} 恒全权，{@code ALLUSER} 按表判、**空 = 未授权**）。
+     * 要改只有两个入口：控制台的授权操作，或让主人改 {@code skillctl.json}；
+     * {@code skills/权限注册表.md} 只是自动生成的视图，改它无效。</p>
      */
     private String poke(Cfg c, Args a, Host h) {
+        // op 判定（动作分支开头）：戳一戳 = friend.poke
+        String deny = h.need("friend.poke");
+        if (deny != null) return deny;
         long qq = user(a, h);
         if (qq <= 0L) return missing(c, "qq");
         long gid = a.l("group", a.l("group_id", 0L));
@@ -400,8 +425,11 @@ public class FriendSkill implements Skill {
         return msg(c, "已戳私聊", "[friend] poke qq={qq}", "qq", String.valueOf(qq));
     }
 
-    /** 改机器人自己的 QQ 昵称：{@code set_qq_profile}（只发 nickname，避免清掉签名）。E 类平台动作，非主人被拒。 */
+    /** 改机器人自己的 QQ 昵称：{@code set_qq_profile}（只发 nickname，避免清掉签名）。平台动作，非主人被拒。 */
     private String rename(Cfg c, Args a, Host h) {
+        // op 判定（动作分支开头）：改机器人昵称 = friend.rename
+        String deny = h.need("friend.rename");
+        if (deny != null) return deny;
         String name = Str.trim(a.str("name", a.str("nickname", "")));
         if (Str.blank(name)) return missing(c, "name");
         R r = act(h, "set_qq_profile", J.obj("nickname", name));
@@ -411,8 +439,11 @@ public class FriendSkill implements Skill {
         return msg(c, "已改昵称", "[friend] rename {name}", "name", name);
     }
 
-    /** 改机器人自己的个性签名：{@code set_self_longnick}（NapCat 扩展）。E 类平台动作，非主人被拒。 */
+    /** 改机器人自己的个性签名：{@code set_self_longnick}（NapCat 扩展）。平台动作，非主人被拒。 */
     private String signature(Cfg c, Args a, Host h) {
+        // op 判定（动作分支开头）：改签名 = friend.signature
+        String deny = h.need("friend.signature");
+        if (deny != null) return deny;
         String sig = Str.trim(a.str("signature", a.str("text", "")));
         if (Str.blank(sig)) return missing(c, "signature");
         R r = act(h, "set_self_longnick", J.obj("longNick", sig));
@@ -424,6 +455,9 @@ public class FriendSkill implements Skill {
 
     /** 点赞：{@code send_like}（次数的缺省值在 prompt.md）。 */
     private String like(Cfg c, Args a, Host h) {
+        // op 判定（动作分支开头）：点赞 = friend.like
+        String deny = h.need("friend.like");
+        if (deny != null) return deny;
         long qq = user(a, h);
         if (qq <= 0L) return missing(c, "qq");
         int times = a.i("times", c.num("默认点赞次数", 10));
@@ -438,16 +472,19 @@ public class FriendSkill implements Skill {
 
     // ---------------------------------------------------------------- 动作 / 权限
 
-    /** 动作结果：{@code deny} 非空 = 被权限拦下（不发动作）；否则 {@code resp} 是 NapCat 响应。 */
+    /** 动作结果：{@code deny} 非空 = 被技能管控表拦下（不发动作）；否则 {@code resp} 是 NapCat 响应。 */
     private static final class R {
         String deny;
         JsonObject resp;
     }
 
-    /** 复核权限后发一个 NapCat 动作；平台动作一律走 ACL 的 E 类判定（E 类默认非主人为空 ⇒ 非主人被拒）。 */
+    /**
+     * 复核后发一个 NapCat 动作：动作的 op 名 = {@code napcat.<动作名>}，按技能管控表判
+     * （没放行 = 未授权 = 不可用；{@code MASTER} 与她本人 {@code SYSTEM} 恒全权）。
+     */
     private static R act(Host h, String action, JsonObject params) {
         R r = new R();
-        r.deny = h.needPlatform(action);
+        r.deny = h.need("napcat." + action);
         if (r.deny == null) r.resp = h.napcat().call(action, params == null ? new JsonObject() : params);
         return r;
     }
