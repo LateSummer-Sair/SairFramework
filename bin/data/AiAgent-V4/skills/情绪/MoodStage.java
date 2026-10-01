@@ -8,7 +8,7 @@ import sair.v4.skill.Host;
 import sair.v4.store.Store;
 
 /**
- * 「情绪」的出站兜底：<b>禁词否决 / 软替换（隐私·机密键）/ 只骂触发者 / 自报标记剥离 / 分句成条 + @ 指名</b>
+ * 「情绪」的出站兜底：<b>语气族否决 / 只骂触发者 / 自报标记剥离（转发基板那一份）/ 分句成条 + @ 指名</b>
  * （规格 §6 S1–S3、S10；情绪 v2 的 §3 + 第二轮裁定 E）。
  *
  * <h3>只做纯文本变换</h3>
@@ -16,31 +16,39 @@ import sair.v4.store.Store;
  * 所以这里<b>不写库、不发消息</b>。状态读取用 {@link Store#kv} + {@link Host} 的只读口。</p>
  *
  * <h3>四个口怎么分工</h3>
+ * <p>★★ 第十二轮（GM 令，甲方原话「skill 肯定要拆的，**情绪不能负责输出门限**，宁愿单独放置」）：
+ * <b>常开族（隐私/威胁/自伤/机密键）连同它们的软替换已经整体搬去</b>
+ * {@code data\skills\出站红线\}（{@code RedlineStage}，{@code order=80}，**早于**本 stage 的 90）。
+ * 本类从此<b>只管情绪自己的三件事</b>：语气族否决 / 只骂触发者（S2）/ 拆句与加 @；
+ * 外加把「自报标记剥离」<b>转发</b>给基板那一份唯一实现（见下面「标记族」一节）。</p>
  * <ul>
- *   <li>{@link #veto}：命中「禁词」类目 ⇒ <b>整条不发</b>。v2 起分两族（见 {@link #banned}）：
- *       <b>常开族</b>（{@code 禁词常开} 列的类目）在<b>任何状态</b>都处理；
- *       <b>语气族</b>（其余 {@code 禁词-<类目>}）只在 {@code angry} / {@code strike} 否决。
- *       哪些类目"只否决、绝不替换"由 {@code 禁词不替换} 那条**清单键**决定
- *       （第二轮 GM 裁定 E：改成数据驱动；**第三轮甲方 2026-09-20 令：只剩 威胁/自伤**，
- *        {@code 涉政}/{@code 黄赌毒} 已删键下线——那两类只审图片内容；{@code 机密键} 走软替换）。
- *       类目与清单都只在 {@code prompt.md} 里（<b>不硬编码</b>：改一个词/一个类目要动 {@code .java}
- *       就得 reload，reload 会掉内存态）。</li>
- *   <li>{@link #transform}：① 剥掉自报标记那一行（用户不许看到 {@code [[mood:…]]}）；
- *       ② <b>软替换</b>：命中类目若配了 {@code 禁词替换-<类目>}（出厂：隐私、机密键）
- *       ⇒ 把那几个词换成替换串，<b>不是</b>整条否决；③ <b>只骂触发者</b>：状态里记的
- *       {@code trigger_by} 与这条消息的落点不是同一个人、却带着攻击性词 ⇒ 把词降级（S2）。
- *       若这条正文<b>已经 @ 到 trigger_by</b>（点名了），S2 不算"误伤"（v2 §3.4）。</li>
+ *   <li>{@link #veto}：命中<b>语气族</b>禁词类目（{@code 固有属性} / {@code 情绪操纵} / {@code 敬语} /
+ *       {@code 身份豁免语句}）⇒ <b>整条不发</b>，而且<b>只在 {@code angry} / {@code strike}</b>
+ *       （语气族要看情绪态 ⇒ 没有 caller 就没有场合 ⇒ 不否决）。类目词表只在 {@code prompt.md} 里
+ *       （<b>不硬编码</b>：改一个词要动 {@code .java} 就得 reload，reload 会掉内存态）。</li>
+ *   <li>{@link #transform}：① 剥掉自报标记那一行（用户不许看到 {@code [[mood:…]]}）——
+ *       <b>判据与实现都在基板</b> {@link sair.v4.qq.MoodMarks}，这里只是转发；
+ *       ② <b>只骂触发者</b>：状态里记的 {@code trigger_by} 与这条消息的落点不是同一个人、却带着攻击性词
+ *       ⇒ 把词降级（S2）。若这条正文<b>已经 @ 到 trigger_by</b>（点名了），S2 不算"误伤"（v2 §3.4）。
+ *       ★ 第十二轮之前这里还有一步"软替换"（隐私/机密键），现在那一步在出站红线里。</li>
  *   <li>{@link #extra}：不用。</li>
  *   <li>{@link #finish}（v2 新增）：整批收尾 —— 群 + 落点人就是 {@code trigger_by} +
  *       本场合 {@code angry}/{@code strike} 时，把她糊在一条里的几句话<b>分句成多条</b>
- *       并给<b>首条</b>加 {@code [CQ:at,qq=…]} 指名（见 {@link #finish}）。</li>
+ *       并给<b>首条</b>加 {@code [CQ:at,qq=…]} 指名（见 {@link #finish}）。
+ *       <b>2026-09-26 敬重档</b>：落点人是敬重档（基板好感度 &gt;= {@code 敬重档-好感度}）
+ *       ⇒ 这一步<b>整个不做</b>（他连"生气的交付形状"都不该收到）。</li>
  * </ul>
  *
- * <h3>已知缺口（诚实记录，不许假装覆盖）</h3>
- * <p>她若自己调 {@code send} / 表情包工具发消息，那条路<b>完全绕过出站管线</b>
- * （{@code Agent} 的工具发送路径），于是这里的剥离与拦截<b>一步都不生效</b>：
- * 标记会外泄、禁词不会被拦。这一条由 {@code probe\ProbeEmotion} 的一条<b>基线断言</b>钉住
- * （断言"当前会外泄"），不假装它已经被覆盖。</p>
+ * <h3>标记族：判据已下沉基板（本类只调用，不持有实现）</h3>
+ * <p>{@code [[mood:…]]} 的<b>识别与剥离</b>已经搬进基板 {@link sair.v4.qq.MoodMarks}
+ * （2026-09-22「基板提炼批」，审计 §5-1）：标记是<b>基板与模型之间的约定</b>，不该随一个可选技能的
+ * 生死而变。本类下面那几个 {@code static} 方法（{@code stripMarks} / {@code markStart} / {@code markTag}
+ * / {@code hasRelayMark} / {@code markOf}）现在都是<b>转发</b>，一行判据都没留。
+ * 基板另外在 {@code term.Sinks.gate}（逐条）与 {@code qq.Api}（工具发送路）各调一次同一份实现
+ * ⇒ 技能移走 / 编译失败 / {@code extEnabled=false} / 工具发送路 这四种形态都不再外泄字面量。</p>
+ *
+ * <p><b>本类仍然负责的</b>：{@code [[mood:转述]]} 的<b>语义</b>（这一批一个字都不 @、不拆句）——
+ * 它要看情绪态与场合，仍住在这里（{@link #finish} 的 {@code takeRelay}）。</p>
  */
 public class MoodStage implements OutboundStage {
 
@@ -49,10 +57,10 @@ public class MoodStage implements OutboundStage {
 
     /**
      * 「转述」标记名（**归一化后**比较的那个词）。
-     * <p>第十轮：识别与剥离都走 {@link #markStart} 的归一化匹配 ⇒ 原来那个精确前缀常量
-     * {@code MARK = "[[mood:"} 已被取代（`[[`/`[`、大小写、冒号后空格都不再影响识别）。</p>
+     * <p>第十轮：识别与剥离都走 {@link sair.v4.qq.MoodMarks#start} 的归一化匹配；
+     * 实现已搬进基板（本类只留常量与转发，见类 javadoc）。</p>
      */
-    static final String RELAY_TAG = "转述";
+    static final String RELAY_TAG = sair.v4.qq.MoodMarks.RELAY_TAG;
 
     /**
      * 「**转述**」自报标记（第九轮 GM 令 A2）：她的回复里写了 {@code [[mood:转述]]} ⇒ 本轮**一个字都不 @**。
@@ -60,37 +68,19 @@ public class MoodStage implements OutboundStage {
      * 记一枚 {@code session → 到期时刻}（30 秒）：{@link #transform} 落、{@link #finish} 取（取完即清）。
      * 它只服务**同一次发送**（逐条 transform 与整批 finish 在同一批里跑完），技能 reload 会清掉它
      * —— 两种情况都不影响正确性。</p>
-     * <p>★ 第十轮：形态归一化由 {@link #markStart}/{@link #markTag} 负责，这个常量只是"她该写什么"的
-     * 规范写法（提示词与夹具引用它）。</p>
+     * <p>★ 形态归一化由基板 {@link sair.v4.qq.MoodMarks} 负责；这个常量只是"她该写什么"的
+     * 规范写法（提示词与夹具引用它），取值直接来自那一处（不写第二份字面量）。</p>
      */
-    static final String RELAY_MARK = "[[mood:转述]]";
-    private static final long RELAY_TTL_MS = 30000L;
-    private static final java.util.concurrent.ConcurrentHashMap<String, Long> RELAY =
-            new java.util.concurrent.ConcurrentHashMap<String, Long>();
+    static final String RELAY_MARK = sair.v4.qq.MoodMarks.mark();
 
-    /** 记一枚转述标记（只对**同一次发送**有效；顺手清掉过期的）。 */
+    /** 记一枚转述标记（只对**同一次发送**有效；实现与 TTL 都在基板 {@code MoodMarks} 一处）。 */
     static void markRelay(String session) {
-        if (!Str.has(session)) return;
-        long now = System.currentTimeMillis();
-        try {
-            for (java.util.Map.Entry<String, Long> e : RELAY.entrySet()) {
-                Long v = e.getValue();
-                if (v == null || now - v.longValue() > RELAY_TTL_MS) RELAY.remove(e.getKey());
-            }
-            RELAY.put(session, Long.valueOf(now));
-        } catch (Throwable ignored) {
-        }
+        sair.v4.qq.MoodMarks.relay(session);
     }
 
     /** 取一枚转述标记（**取完即清**）：这一批是不是"转述轮"。 */
     static boolean takeRelay(String session) {
-        if (!Str.has(session)) return false;
-        try {
-            Long v = RELAY.remove(session);
-            return v != null && (System.currentTimeMillis() - v.longValue()) <= RELAY_TTL_MS;
-        } catch (Throwable t) {
-            return false;
-        }
+        return sair.v4.qq.MoodMarks.takeRelay(session);
     }
 
     @Override
@@ -98,28 +88,19 @@ public class MoodStage implements OutboundStage {
         return ORDER;
     }
 
-    // ================================================================ veto：禁词整条不发
+    // ================================================================ veto：语气族整条不发
 
     /**
-     * 一票否决。
+     * 一票否决（**只剩语气族**）。
      *
-     * <p><b>第五轮（GM 裁定，复核者实证）：常开族不需要"场合"。</b>
-     * 定时任务 / 闹钟到点的出站走 {@code Sinks.TaskSink}，那里 {@code caller} 是**硬编码 null**
-     * （{@code Sinks.java:462}），而原来的写法在 {@code qq <= 0} 处**整条 return false**
-     * ⇒ 常开族（隐私/威胁/自伤/机密键）在这些落点上**被一起放掉了**（复核者的 A/B 原始回执：
-     * {@code TaskSink say(威胁) -> sends=1} 原样出站，而 {@code QqSink say(威胁) -> sends=0}）。
-     * 既然可达（{@code Tick.java} 的闹钟到点、{@code Agent.java} 里普通用户建的闹钟回合没有说话工具
-     * ⇒ {@code sink.say(...)} 直投），就必须在**判定 caller/场合之前**先判常开族。</p>
+     * <p>★★ 第十二轮（GM 令，甲方原话「skill 肯定要拆的，**情绪不能负责输出门限**，宁愿单独放置」）：
+     * <b>常开族（隐私/威胁/自伤/机密键）连同它们的软替换整体搬去 {@code data\skills\出站红线\}</b>
+     * （那边 order=80，**早于**本 stage 的 90）。本方法从此只管一件事：
+     * <b>语气族</b>（{@code 固有属性/情绪操纵/敬语/身份豁免语句}）**只在 angry / strike** 命中即整条否决
+     * —— 它是"治客服腔"的，不是法律红线，所以 calm 态照旧放行。</p>
      *
-     * <p>三条口径（其余一字不改）：</p>
-     * <ol>
-     *   <li><b>常开族（且没有 {@code 禁词替换-*}）⇒ 有正文、命中就整条否决</b>，
-     *       与 {@code caller} 是否为 null、场合取不取得到**无关**（{@link #bannedAlways}）；</li>
-     *   <li><b>软替换类（隐私/机密键）保持原样</b>：{@link #transform} 里的替换发生在
-     *       "取 store / peek"**之前**，本来就不需要 caller 或场合 ⇒ 没场合时照样换词放行；</li>
-     *   <li><b>语气族（固有属性/情绪操纵/敬语/身份豁免）保持原样</b>：没有 caller = 没有场合 =
-     *       没有情绪态 ⇒ 不否决（这一支仍走 {@link #bannedTone}，只在 angry/strike 生效）。</li>
-     * </ol>
+     * <p>因为语气族要看情绪态，它**仍然需要场合**：没有 caller（定时任务/闹钟落点）就没有场合
+     * ⇒ 一律不否决（这条口径一字未改；那种落点上的红线交给新技能，它不需要场合）。</p>
      */
     @Override
     public boolean veto(Outbound m) {
@@ -131,31 +112,36 @@ public class MoodStage implements OutboundStage {
             if (!c.flag("出站兜底", true)) return false;
             long qq = m.caller() == null ? 0L : m.caller().qq();
             long gid = m.group() ? m.target() : 0L;
-            // ---- ① 常开族：**不需要 caller / 场合**（第五轮裁定；定时任务落点也拦得住）----
-            String hit = bannedAlways(c, m.text());
-            // ---- ② 需要场合的那一半（语气族）----
-            if (hit == null) {
-                if (qq <= 0L) return false;          // 没有"谁在说话"= 没有场合 ⇒ 语气族不生效
-                Store s = store(h);
-                if (s == null) return false;
-                EmotionMood.Mood mood = EmotionMood.peek(s, c, qq, gid, System.currentTimeMillis());
-                hit = bannedTone(c, m.text(), mood == null ? "" : mood.state);
-            }
+            if (qq <= 0L) return false;          // 没有"谁在说话"= 没有场合 ⇒ 语气族不生效
+            Store s = store(h);
+            if (s == null) return false;
+            // ★ 批 15 / 2026-09-26（时钟接缝第二步）：出站这一层读"现在"也必须走
+            //   EmotionMood.nowMs()（唯一真源）。WHY：peek() 在 m.slot != slotOf(now) 时把状态当成
+            //   calm 返回（懒翻页），而情绪行是按**接缝那个时刻**写下的 slot ⇒ 这一处若读裸墙上时钟，
+            //   注入/平移时钟的夹具里"每条出站都把情绪重置回 calm"（分句/@ 全失效，V15 实测 17 红）。
+            //   默认（没注入）= 真实墙上时钟，生产与改前逐字节相同。
+            EmotionMood.Mood mood = EmotionMood.peek(s, c, qq, gid, EmotionMood.nowMs());
+            String hit = bannedTone(c, m.text(), mood == null ? "" : mood.state);
             if (hit == null) return false;
-            // 场景标签：有 caller 时**逐字与改动前相同**；没有 caller 时给一句人话（不再伪装成 private:0）
-            String scene = qq > 0L ? EmotionMood.scopeOf(gid, qq)
-                    : (m.group() ? ("group:" + gid + "（定时/闹钟落点，无 caller）")
-                                 : "（定时/闹钟落点，无 caller）");
+            // 场景标签：有 caller 时**逐字与改动前相同**
+            String scene = EmotionMood.scopeOf(gid, qq);
             EmotionMood.warn(h, "出站否决：命中禁词类目「" + hit + "」（场景 " + scene + "）");
             // ★ 让她自己也知道"这条没发出去"（主人 2026-09-19 定：否决要有可见回执）：
             //   往本会话的 context 槽写一行，下一轮她读得到；她自己换了说法发出去时会被 transform 清掉。
-            try {
-                if (h != null) {
-                    h.inject().put(m.session(), "context", "emotion_veto",
-                            "【出站被拦】上一条回复被情绪规则拦下、没有发出去（命中「" + hit + "」，"
-                            + scene + "）。想说的话换个说法再说，别原样重发。", "情绪");
+            // ★ 第十二轮：常开族那条回执改用 `redline_veto`（在出站红线插件里）；这里仍是 `emotion_veto`。
+            //   ★★ 第十三轮（GM 令）：**空会话不许写** —— `m.session()` 为空（控制台落点：caller==null /
+            //   target<=0）时 `Inject.put` 会把空场合映射成**全局 `*`**（`Inject:48`），那条提示就会在
+            //   **每一个会话**里都看得见。空会话没有提示可挂 ⇒ **不写**（否决本身照旧生效）。
+            //   出站红线那侧（`RedlineStage.veto`）有同一处守卫，两处口径一致。
+            if (Str.has(m.session()) && m.target() > 0L) {
+                try {
+                    if (h != null) {
+                        h.inject().put(m.session(), "context", "emotion_veto",
+                                "【出站被拦】上一条回复被情绪规则拦下、没有发出去（命中「" + hit + "」，"
+                                + scene + "）。想说的话换个说法再说，别原样重发。", "情绪");
+                    }
+                } catch (Throwable ignored) {
                 }
-            } catch (Throwable ignored) {
             }
             return true;
         } catch (Throwable t) {
@@ -186,19 +172,23 @@ public class MoodStage implements OutboundStage {
             boolean relay = hasRelayMark(out);
             if (relay) markRelay(m.session());
             // ---- ① S10：自报标记必须剥离（含"只写了一半"的残行）
+            //      ★ 2026-09-22 基板提炼批：实现已搬进基板 `sair.v4.qq.MoodMarks`（这里只转发）。
+            //      ★★ 事实（第十四轮审计 §7-2 更正的那条注释）：这一步写在**所有 flag 判断之前**
+            //        （它在下面的 `if (c.flag("出站兜底") && c.flag("开关"))` 之外）——
+            //        所以 `出站兜底:false` / `开关:false` **停不掉**它；能停掉它的只有
+            //        "这个技能不装载"（移走 / 编译失败 / `extEnabled:false`），而那几种形态现在由
+            //        基板 `term.Sinks.gate` 与 `qq.Api` 用同一份实现兜住。
             String stripped = stripMarks(out);
             if (!stripped.equals(out)) {
                 out = stripped;
                 touched = true;
             }
-            // ---- ② v2 §3.2：先替换（隐私一类"配了替换串"的常开族：换词放行，不是整条不发）
-            //         再 ③ S2（只骂触发者）。这两步的先后是契约钉的：替换完再软化。
+            // ---- ② S2（只骂触发者）----
+            //      ★ 第十二轮（GM 令「情绪不能负责输出门限」）：这里的**软替换**那一步已经搬去
+            //      `data\skills\出站红线\`（`RedlineStage.transform`，order=80，**早于**本 stage 的 90）
+            //      ⇒ 情绪这一层不再碰任何"禁词-隐私/机密键"式的常开族替换，只做它自己的两件事：
+            //      语气族否决（veto）+ 只骂触发者/拆句/加 @（transform/finish）。
             if (c.flag("出站兜底", true) && c.flag("开关", true)) {
-                String rep = replace(c, out);
-                if (!rep.equals(out)) {
-                    out = rep;
-                    touched = true;
-                }
                 Store s = store(h);
                 long gid = m.group() ? m.target() : 0L;
                 if (s != null) {
@@ -218,7 +208,7 @@ public class MoodStage implements OutboundStage {
                     boolean group = gid > 0L;
                     long scopeQq = group ? 0L : who;           // 状态按"谁在跟她说话"那个场合存
                     EmotionMood.Mood mood = EmotionMood.peek(s, EmotionMood.scopeOf(gid, scopeQq),
-                            System.currentTimeMillis(), c);
+                            EmotionMood.nowMs(), c);      // ★ 批 15：同一个接缝（默认 = 真实时钟）
                     String state = mood == null ? "" : mood.state;
                     boolean hot = EmotionMood.S_ANGRY.equals(state) || EmotionMood.S_STRIKE.equals(state);
                     // 罢工与生气同档处理：罢工是生气的升级态，S2 在这里对它更该生效，不该失效。
@@ -282,11 +272,18 @@ public class MoodStage implements OutboundStage {
             if (s == null) return null;
             // 本场合的情绪（群 = group:<群号>，与 transform / veto 同一个 scope）
             EmotionMood.Mood mood = EmotionMood.peek(s, EmotionMood.scopeOf(gid, 0L),
-                    System.currentTimeMillis(), c);
+                    EmotionMood.nowMs(), c);              // ★ 批 15：同一个接缝（默认 = 真实时钟）
             if (mood == null) return null;
             String st = mood.state;
             if (!EmotionMood.S_ANGRY.equals(st) && !EmotionMood.S_STRIKE.equals(st)) return null;
             if (mood.by <= 0L || mood.by != who) return null;             // 只对**触怒者本人**（不误伤）
+            // ★ 2026-09-26 敬重档（K7 批，甲方规格：好感度 >=700 ⇒ 不再对此人发怒）：
+            //   连"分句连发 + @ 指名"这种**生气的交付形状**也不给他 —— 语气那一半在注入面
+            //   （EmotionProvider → EmotionMood.block）里已经换成敬重档，这里只是同一条口径在出站面的落点，
+            //   判据同源（EmotionMood.respect，只读基板好感度）。没进档 ⇒ 一个字都不改（与改前一致）。
+            //   ★ 只做这一件事：出站那一层的**语气族禁词否决**（veto）没有跟着豁免 —— 它是"治客服腔"的
+            //     （禁词-敬语 那几类），不是"发给谁"的问题；敬重档文案本身也不含那一族的词。
+            if (EmotionMood.respect(c, h, m.caller(), who).on) return null;
             int cap = c.i("分句上限-" + st, 1);
             if (cap <= 1) return null;                                    // §3.3：分句上限 == 1 ⇒ 不改
             boolean changed = false;
@@ -379,93 +376,28 @@ public class MoodStage implements OutboundStage {
 
     // ================================================================ 禁词 / 攻击词
 
-    /**
-     * 常开族类目（{@code 禁词常开} 读不到时的下限 —— 与 prompt.md 那行的出厂值同源）。
-     * <p><b>第三轮（甲方 2026-09-20 令）</b>：{@code 涉政} / {@code 黄赌毒} 已下线
-     * （那两类**只审图片内容**，由 {@code data\skills\辅助识图\} 那条线承载）⇒ 这里只剩四类。</p>
-     */
-    static final String DEF_ALWAYS = "隐私,威胁,自伤,机密键";
+    // ★★ 第十二轮（GM 令「情绪不能负责输出门限」）★★
+    //   这一段原来有：`DEF_ALWAYS`（常开族下限）、`DEF_NEVER_REPLACE`（绝不替换清单下限）、
+    //   `CAT_SECRET`、`bannedAlways()`、`alwaysCats()`、`neverReplaceCats()`、`neverReplace()`、
+    //   `replaceable()`、`replace()`、以及合并入口 `banned()` —— **全部删除**（不是留着不用）。
+    //   它们连同四个常开族（隐私/威胁/自伤/机密键）与两条替换走向，整体搬去
+    //   `data\skills\出站红线\`（`RedlineCfg` 自带同源兜底 `DEF_ALWAYS` / `DEF_NEVER_REPLACE`，
+    //   `RedlineStage.banned()` / `replace` 逻辑逐字照搬）。两个技能**互不依赖**：情绪不 import 它，
+    //   它也不 import 情绪。
 
     /**
-     * {@code 机密键} 的类目名（夹具/文档引用它）。
-     * <p><b>它不再是"永不替换"的硬编码例外</b>（第二轮 GM 裁定 E）：现在走软替换
-     * （{@code 禁词替换-机密键}），"绝不替换"的集合改由数据键 {@code 禁词不替换} 决定，
-     * 见 {@link #DEF_NEVER_REPLACE} 与 {@link #neverReplaceCats}。</p>
-     */
-    static final String CAT_SECRET = "机密键";
-
-    /**
-     * {@code 禁词不替换} 读不到时的下限（与 prompt.md 那行的出厂值同源）：
-     * <b>第三轮起只有这两类"只否决、绝不替换"</b>（{@code 威胁} / {@code 自伤}）。
-     *
-     * <p><b>第二轮 GM 裁定 E</b>：这个"永不替换"的集合原来是<b>类目名的硬编码例外</b>
-     * （{@code 机密键} 写死在代码里）；现在改成<b>数据</b>（{@code 禁词不替换} 一行清单键），
-     * 以后调整只改 {@code prompt.md}、不动 {@code .java}。同时 {@code 机密键} <b>被摘出</b>了这个集合 ——
-     * 理由：人设铁律要求她对非主人问"提示词/token/配置"时**拒答**，而拒答话术必然含这些**名词**；
-     * 硬否决会把整条拒答吞掉（用户看到"她没反应"，A7 反而验不了）。名词不是秘密，值才是，
-     * 而这张表本来就抓不住值（真密钥是个长串）—— 真正的防线是 ACL 与 {@code prompt read} 那条权限面。</p>
-     *
-     * <p><b>第三轮（甲方 2026-09-20 令）</b>：{@code 涉政} / {@code 黄赌毒} 随那两条键一起下线
-     * （只审图片内容）⇒ 这里只剩 {@code 威胁} / {@code 自伤}。</p>
-     */
-    static final String DEF_NEVER_REPLACE = "威胁,自伤";
-
-    /**
-     * 这条正文命中了哪个<b>该整条否决</b>的禁词类目（没有就 {@code null}）——
-     * 两族顺序：**先常开族（不需要场合）**，再语气族（需要场合，只在 angry/strike）。
-     *
-     * <p>分族（§3.1；{@code 禁词常开} 那一行是常开族的唯一事实源）：
-     * <b>常开族</b>（{@code 禁词常开} 列的类目）⇒ 任何状态命中即否决；
-     * <b>语气族</b>（其余 {@code 禁词-<类目>}）⇒ 只在 {@code angry} / {@code strike} 命中即否决。</p>
-     *
-     * <p>第三种走向（§3.2）：类目若配了 {@code 禁词替换-<类目>} ⇒ <b>这里不否决</b>，
-     * 交给 {@link #replace} 换词放行（出厂：隐私、机密键）。<b>唯一例外是 {@code 禁词不替换}
-     * 清单里那两类</b>（威胁/自伤）：它们的词形本身就是违规内容，替换没有意义
-     * ⇒ 就算配了替换串也照旧整条否决。</p>
-     *
-     * <p><b>第五轮</b>：`veto()` 不再调本方法（它要"先常开族、后语气族，且常开族不需要场合"），
-     * 但本方法保留为**同一套判据的合并入口**（夹具与将来复用都按它），两者由
-     * {@link #bannedAlways} + {@link #bannedTone} 拼出来，口径不可能分叉。</p>
-     *
-     * @param state 本场合的情绪态（{@code calm/angry/strike/…}；空串 = 读不到 ⇒ 按语气族不生效处理）
-     */
-    static String banned(EmotionCfg c, String text, String state) {
-        String hit = bannedAlways(c, text);
-        if (hit != null) return hit;
-        return bannedTone(c, text, state);
-    }
-
-    /**
-     * <b>常开族</b>里"不可替换"的那几个类目命中（没有就 {@code null}）。
-     * <p><b>不需要 caller、不需要场合</b>（第五轮 GM 裁定）：定时任务/闹钟落点
-     * （{@code Sinks.TaskSink}，caller 恒为 null）也要拦得住。
-     * 类目顺序按 `prompt.md` 里的出现次序（与改动前那一趟遍历同序 ⇒ 报出来的类目名不变）。</p>
-     */
-    static String bannedAlways(EmotionCfg c, String text) {
-        if (c == null || Str.blank(text)) return null;
-        List<String> always = alwaysCats(c);
-        for (String cat : categories(c)) {
-            if (!always.contains(cat)) continue;        // 只扫常开族
-            if (replaceable(c, cat)) continue;          // 配了替换串的（隐私/机密键）走软替换
-            for (String w : c.tags("禁词-" + cat)) {
-                if (Str.has(w) && text.contains(w)) return cat;
-            }
-        }
-        return null;
-    }
-
-    /**
-     * <b>语气族</b>（= 除常开族之外的所有 {@code 禁词-<类目>}）命中，且<b>只在 angry / strike</b>
+     * <b>语气族</b>（= 情绪 `prompt.md` 里剩下的那些 {@code 禁词-<类目>}：固有属性 / 情绪操纵 /
+     * 敬语 / 身份豁免语句）命中，且<b>只在 angry / strike</b>
      * （没有场合 ⇒ 没有情绪态 ⇒ 一律不否决，这条口径没变）。
+     *
+     * <p>★ 第十二轮：常开族已经不在这里判（搬去出站红线），所以本方法不再做"跳过常开族 / 跳过可替换类目"
+     * 那两步 —— 剩下的类目**全都是语气族**，一条一条扫即可。</p>
      */
     static String bannedTone(EmotionCfg c, String text, String state) {
         if (c == null || Str.blank(text)) return null;
         boolean hot = EmotionMood.S_ANGRY.equals(state) || EmotionMood.S_STRIKE.equals(state);
         if (!hot) return null;
-        List<String> always = alwaysCats(c);
         for (String cat : categories(c)) {
-            if (always.contains(cat)) continue;         // 常开族已经在 bannedAlways 里判过
-            if (replaceable(c, cat)) continue;
             for (String w : c.tags("禁词-" + cat)) {
                 if (Str.has(w) && text.contains(w)) return cat;
             }
@@ -473,62 +405,10 @@ public class MoodStage implements OutboundStage {
         return null;
     }
 
-    /** 常开族类目清单：{@code 禁词常开}（逗号切）；读不到用同源兜底。 */
-    static List<String> alwaysCats(EmotionCfg c) {
-        List<String> out = new java.util.ArrayList<String>();
-        List<String> raw = c == null ? null : c.tags("禁词常开");
-        if (raw == null || raw.isEmpty()) raw = EmotionCfg.split(DEF_ALWAYS);
-        for (String x : raw) {
-            String t = Str.trim(x);
-            if (Str.has(t) && !out.contains(t)) out.add(t);
-        }
-        return out;
-    }
-
     /**
-     * 「只否决、绝不替换」的类目清单（{@code 禁词不替换}；读不到用同源兜底 = 威胁/自伤）。
-     * <p>数据驱动（第二轮 GM 裁定 E）：以后收窄/扩大这个集合只改 {@code prompt.md} 那一行。
-     * 第三轮（甲方 2026-09-20 令）从四类收窄到两类（`涉政`/`黄赌毒` 随键删除下线，只审图片内容）。</p>
+     * 语气族类目名（从 `prompt.md` 的 {@code 禁词-<类目>} 键里读；读不到用同源兜底类目名）。
+     * <p>★ 第十二轮：兜底清单里**不再有** 隐私/威胁/自伤/机密键（那四类已搬去出站红线）。</p>
      */
-    static List<String> neverReplaceCats(EmotionCfg c) {
-        List<String> out = new java.util.ArrayList<String>();
-        List<String> raw = c == null ? null : c.tags("禁词不替换");
-        if (raw == null || raw.isEmpty()) raw = EmotionCfg.split(DEF_NEVER_REPLACE);
-        for (String x : raw) {
-            String t = Str.trim(x);
-            if (Str.has(t) && !out.contains(t)) out.add(t);
-        }
-        return out;
-    }
-
-    /** 这个类目"只否决、绝不替换"吗（{@code 禁词不替换} 清单里有没有它）。 */
-    static boolean neverReplace(EmotionCfg c, String cat) {
-        return cat != null && neverReplaceCats(c).contains(cat);
-    }
-
-    /** 这个类目走软替换吗（配了 {@code 禁词替换-<类目>} **且**不在"绝不替换"清单里）。 */
-    static boolean replaceable(EmotionCfg c, String cat) {
-        if (c == null || cat == null) return false;
-        if (neverReplace(c, cat)) return false;
-        return Str.has(c.s("禁词替换-" + cat, ""));
-    }
-
-    /** §3.2：把命中的 {@code 禁词-<类目>} 换成 {@code 禁词替换-<类目>}（"绝不替换"那几类不参与）。 */
-    static String replace(EmotionCfg c, String text) {
-        if (c == null || Str.blank(text)) return text;
-        String out = text;
-        for (String cat : categories(c)) {
-            if (!replaceable(c, cat)) continue;
-            String rep = c.s("禁词替换-" + cat, "");
-            for (String w : c.tags("禁词-" + cat)) {
-                if (!Str.has(w) || !out.contains(w)) continue;
-                out = out.replace(w, rep);
-            }
-        }
-        return out;
-    }
-
-    /** 禁词类目名（从 prompt.md 的 {@code 禁词-<类目>} 键里读；读不到用兜底类目名）。 */
     static List<String> categories(EmotionCfg c) {
         List<String> out = new java.util.ArrayList<String>();
         if (c != null) {
@@ -541,9 +421,9 @@ public class MoodStage implements OutboundStage {
         }
         if (out.isEmpty()) {
             out.add("固有属性");
-            out.add("威胁");
-            out.add("自伤");
             out.add("情绪操纵");
+            out.add("敬语");
+            out.add("身份豁免语句");
         }
         return out;
     }
@@ -560,90 +440,41 @@ public class MoodStage implements OutboundStage {
         return out;
     }
 
-    // ================================================================ 自报标记（★ 第十轮：归一化匹配）
+    // ================================================================ 自报标记（★ 判据已下沉基板；这里只转发）
 
     /**
      * 归一化：这一行里第一个 {@code mood} 标记的**起始下标**；没有返回 {@code -1}。
-     *
-     * <p>认得：{@code [[mood:}} / {@code [mood:}（中括号一个两个都行）、{@code MOOD} 任意大小写；
-     * 冒号必须紧跟 {@code mood}（冒号后的空格由 {@link #markTag} 去掉）。</p>
-     *
-     * <p>★ 第十轮 GM 令（复核者实测）：原来只认精确串 ⇒ {@code [[mood: 转述]]}（冒号后空格）
-     * **会被剥掉却认不出**（照样 @）、{@code [[MOOD:转述]]} / {@code [mood:转述]} 则**直接外泄给用户**。
-     * 识别与剥离现在都走这一处，整族（做不到/为难/违规/转述）一起享受同样归一化 —— 不写两套。</p>
+     * <p><b>转发</b> {@link sair.v4.qq.MoodMarks#start}：本类不再持有实现（判据只有基板那一处）。</p>
      */
     static int markStart(String line) {
-        if (line == null || line.indexOf('[') < 0) return -1;
-        for (int i = 0; i < line.length(); i++) {
-            if (line.charAt(i) != '[') continue;
-            int j = i + 1;
-            if (j < line.length() && line.charAt(j) == '[') j++;
-            if (j + 5 > line.length()) continue;
-            if (!line.regionMatches(true, j, "mood", 0, 4)) continue;
-            if (line.charAt(j + 4) != ':') continue;
-            return i;
-        }
-        return -1;
+        return sair.v4.qq.MoodMarks.start(line);
     }
 
-    /** 归一化后的标记名（去掉两侧空格/全角空格/制表符与 {@code ]}）：`转述` / `做不到` / `为难` / `违规`；没有返回空串。 */
+    /** 归一化后的标记名（{@code 转述} / {@code 做不到} / {@code 为难} / {@code 违规}）。转发基板那一处。 */
     static String markTag(String line) {
-        int i = markStart(line);
-        if (i < 0) return "";
-        int j = line.indexOf(':', i);
-        if (j < 0) return "";
-        int k = line.indexOf(']', j + 1);
-        String tag = k < 0 ? line.substring(j + 1) : line.substring(j + 1, k);
-        return tag.replace("]", "").replace(" ", "").replace("\t", "").replace("\u3000", "").trim();
+        return sair.v4.qq.MoodMarks.tag(line);
     }
 
-    /** 这一批文本里有没有「转述」自报标记（**归一化**：大小写 / 中括号数 / 空格都不敏感）。 */
+    /** 这一批文本里有没有「转述」自报标记（归一化）。转发基板那一处。 */
     static boolean hasRelayMark(String text) {
-        if (text == null) return false;
-        String[] lines = text.replace("\r\n", "\n").replace('\r', '\n').split("\n", -1);
-        for (int i = 0; i < lines.length; i++) {
-            if (RELAY_TAG.equals(markTag(lines[i]))) return true;
-        }
-        return false;
+        return sair.v4.qq.MoodMarks.hasRelay(text);
     }
 
     /**
      * 这一条文本里认出来的标记（归一化；没有就是空串）。
-     * <p>只读：真正的"记分"发生在 {@link MoodLifecycle}（那条路拿得到整段回复，
-     * 也才凑得齐"双证据"里的结构失败证据）。</p>
+     * <p>只读：真正的"记分"发生在 {@link MoodLifecycle}。转发基板那一处。</p>
      */
     static String markOf(String text) {
-        if (text == null) return "";
-        String[] lines = text.replace("\r\n", "\n").replace('\r', '\n').split("\n", -1);
-        for (int i = 0; i < lines.length; i++) {
-            String t = markTag(lines[i]);
-            if (Str.has(t)) return t;
-        }
-        return "";
+        return sair.v4.qq.MoodMarks.tagOf(text);
     }
 
     /**
-     * 剥掉 {@code [[mood:…]]} 那一行（以及只剩半截的残行）。
-     * <p>语义与既有口径**逐字一致**：整行丢弃、保留标记**之前**的文字、去尾部空行；
-     * 唯一变化是匹配走 {@link #markStart} 的**归一化**（大小写 / 中括号数 / 冒号后空格）。</p>
+     * 剥掉 {@code [[mood:…]]} 那一行（以及只剩半截的残行）。<b>转发</b> {@link sair.v4.qq.MoodMarks#strip}。
+     * <p>语义（整行丢弃、保留标记之前的文字、尾部空行压到一个）与实现**都在基板那一处**；
+     * 基板另外还在 {@code term.Sinks.gate} 与 {@code qq.Api} 调同一份 —— 这就是"技能关掉也不外泄"的保证。</p>
      */
     static String stripMarks(String text) {
-        if (text == null || markStart(text) < 0) return text;
-        StringBuilder out = new StringBuilder();
-        String[] lines = text.replace("\r\n", "\n").replace('\r', '\n').split("\n", -1);
-        for (int i = 0; i < lines.length; i++) {
-            String line = lines[i];
-            int mi = markStart(line);
-            if (mi >= 0) {
-                String keep = mi <= 0 ? "" : line.substring(0, mi).trim();
-                if (Str.has(keep)) out.append(keep).append('\n');
-                continue;                                   // 整行丢掉（标记必须单独一行）
-            }
-            out.append(line).append('\n');
-        }
-        String s = out.toString();
-        while (s.endsWith("\n\n")) s = s.substring(0, s.length() - 1);
-        return s.endsWith("\n") ? s.substring(0, s.length() - 1) : s;
+        return sair.v4.qq.MoodMarks.strip(text);
     }
 
     private static Store store(Host h) {

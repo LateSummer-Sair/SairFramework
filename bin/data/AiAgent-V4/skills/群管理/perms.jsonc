@@ -10,9 +10,11 @@
       // 群列表
       // 单个成员资料
       // 群成员列表
-      ["group.list", "group.member", "group.members"]: ["ALLUSER"]
+      // 今日群打卡名单（读类：技能层不设门槛；真正生效的那道是基板的 napcat.get_group_signed_list）
+      // 群分享链接（读类：同上，基板那道是 napcat.get_group_share_link）
+      ["group.list", "group.member", "group.members", "group.signedlist", "group.sharelink"]: ["ALLUSER"]
     },
-    // ── 谁不能用（压过 Run）
+    // ── 谁不能用（压过 Run；写在这里 = 一条"谁都不给"的决定，不是"没列到"）
     "Ban": {
       // ── 群查询与群管动作（group）
       // 禁言 / 解禁
@@ -22,7 +24,18 @@
       // 设置 / 取消管理员
       // 改群名片
       // 改群名
-      ["group.ban", "group.kick", "group.leave", "group.muteall", "group.setadmin", "group.setcard", "group.setname"]: ["ALLUSER"]
+      ["group.ban", "group.kick", "group.leave", "group.muteall", "group.setadmin", "group.setcard", "group.setname"]: ["ALLUSER"],
+
+      // ── NapCat 4.18 边缘能力：高危写类（默认只给主人；非主人含群主/管理员一律拒）
+      // 完成群待办 / 取消群待办（要 confirm=true）
+      // 群成员邀请策略 / 群成员功能权限 / 新成员历史消息可见性（要 confirm=true）
+      // 取消点赞群相册（要 confirm=true）
+      ["group.tododone", "group.todocancel", "group.invitepolicy", "group.memberperm", "group.newmembervis", "group.albumunlike"]: ["ALLUSER"],
+
+      // ── QQ 空间（对外发声 / 删动态）：默认只给主人，且发布那条必须过基板的出站内容闸
+      // 发 QQ 空间说说（公开可见的动态，不是群消息；要 confirm=true）
+      // 删 QQ 空间说说（要 confirm=true）
+      ["group.qzonesend", "group.qzonedel"]: ["ALLUSER"]
     }
   }
 }

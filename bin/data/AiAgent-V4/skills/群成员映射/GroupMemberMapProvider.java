@@ -39,7 +39,9 @@ import sair.v4.skill.Host;
  *       渲染函数签名里就没有调用者信息）；段位口径见 {@code ContextProvider} 类注释：
  *       稳定段排在同一条系统提示词之后、事实块之前，一起构成可复用的前缀；</li>
  *   <li>{@link #order()} = {@code 30}（V4 已有：记忆召回 10 / 用户画像 20）；</li>
- *   <li>{@link #maxChars()} = {@code prompt.md} 的「预算」（默认 800）。</li>
+ *   <li>{@link #maxChars()} = 主人配置的「预算」（<b>出厂 {@code 6000}</b>，见本技能 {@code prompt.md:38}；
+ *     配置读不到时才用代码兜底 {@code DEF_BUDGET = 800}）。★ 2026-09-27 更正：这里原来写「默认 800」，
+ *     把**代码兜底**当成了出厂值（只读审查 L-final 核出来的同一处错记，另一处在本技能 {@code 群成员映射.md:19}，已改）。</li>
  * </ul>
  *
  * <h3>V3 依据（{@code C:\Sair\Local\AiAgent}，包 {@code sair.aiagent}）</h3>

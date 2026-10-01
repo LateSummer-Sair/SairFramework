@@ -28,6 +28,7 @@
 收集审查: on
 发图心情匹配: on
 本机图外发: 中转
+自定义表情查重: on
 
 ## 文案
 发送成功: 发了一张表情包（语境「{scene}」，id=#{id}，这张第 {uses} 次用）
@@ -47,8 +48,30 @@
 缺标记: 要改哪一张？给我 hash（可以只给前几位）或者 id。
 清空成功: 已清空表情包库（删了 {n} 张）。
 清空中断: 清空只删掉 {n} 张就断了，剩下的还在库里，等下一轮再清。
-不支持op: 不支持的 op：{op}（只支持 send / collect / list / remark / clear）。
+不支持op: 不支持的 op：{op}（只支持 send / collect / list / remark / clear / cf_list / cf_add / cf_del / cf_desc）。
 异常: 执行异常：{error}
+
+# ---- QQ 侧自定义表情（cf_* 四个动作；NapCat 4.18.5+；★一律只给主人，非主人由技能直接拒） ----
+# 每一行的文案里都**逐字嵌着那条结构化事实/错误码**（sticker_cf_* / cf_*）：即便以后改了这句中文，
+# 码也还在，日志与回执都认得出是哪一条路。
+自定义表情列表头: 取到自定义表情清单了（sticker_cf_list count={count} faces={faces}），原始返回见下：
+自定义表情详情失败: 取自定义表情详情没成功（sticker_cf_list_fail action=fetch_custom_face_detail error={error}）。
+缺表情: 要添加哪一张？给我库里那张的 id 或 hash，或者直接给本机文件的完整路径（cf_missing_target）。
+要本机文件: 这张不是本机文件（cf_need_local file={file}）—— 添加自定义表情要的是 NapCat 能读到的本机文件；先把图收成本地件（自动收的图就在 files/sticker/ 下），或存到本机再添加。
+已添加过: 这张已经添加过了（sticker_cf_exists md5={md5} emoji_id={emoji_id} res_id={res_id}），没有重复添加。
+QQ 侧已有: QQ 侧已经有同一张了（sticker_cf_exists_remote md5={md5}），没有重复添加。
+添加失败: 添加自定义表情没成功（sticker_cf_add_fail action=add_custom_face error={error}）。
+添加自定义表情成功: 已加进 QQ 自定义表情（sticker_cf_added md5={md5} size={size} emoji_id={emoji_id} res_id={res_id} {note}）。
+要二次确认: 删自定义表情是不可逆的，要显式确认（cf_need_confirm）—— 带上 confirm: true 我才会删。
+库里没记: 库里这一条没有 QQ 侧的记账（cf_not_linked id={id}）—— 不知道它在 QQ 侧叫什么，不敢猜一个值去删；可以改用 cf_list 查清楚再给我 res_id / md5。
+自定义表情缺标记: 要动哪一条？给我库里的 id / hash，或者直接给 res_id 与 md5（cf_missing_target need={need}）。
+删除失败: 删自定义表情没成功（sticker_cf_del_fail action=delete_custom_face error={error}）。
+删除自定义表情成功: 已从 QQ 自定义表情里删掉（sticker_cf_deleted md5={md5} res_id={res_id} emoji_id={emoji_id}）。
+缺描述: 要改成什么描述？给我 desc（cf_missing_desc）。
+描述太长: 描述太长了（cf_desc_too_long len={len} max={max}）—— 自定义表情的描述要短。
+描述没过内容闸: 这句描述过不了内容闸（cf_desc_blocked reason={reason}）—— 换一句再试（标记 / 内部事实行 / 红线词都不能写进 QQ 侧）。
+改描述失败: 改自定义表情描述没成功（sticker_cf_desc_fail action=set_custom_face_desc error={error}）。
+改描述成功: 自定义表情的描述改好了（sticker_cf_desc_set emoji_id={emoji_id} res_id={res_id} md5={md5} chars={chars}）。
 
 # 说明
 # 启用清理：on / true / 1 才算开；关掉就完全不动库（TTL 不跑）。
@@ -139,3 +162,28 @@
 #             ⇒ 默认口径下，发给 NapCat 的值里**绝不会出现 C:\ 这种盘符路径**。
 #           本机路径：老口径（直接把本地路径交给 NapCat，只适合同机部署）—— 要显式写才生效。
 # 想收"只有图、没有文字"的表情：把上面的「默认语境」填一行（比如「表情」）即可 —— 一行配置，不改代码。
+
+# ---- QQ 侧自定义表情（cf_list / cf_add / cf_del / cf_desc）----
+# ★ 这不是"表情包库"，是 **QQ 账号侧的真实资源**：库里的一行是我们这边的一张图（file/hash），
+#   QQ 侧的一条自定义表情的身份是 emoji_id + res_id + md5。两者**不并库**：
+#   cf_add 把库里的一行推上去，成功后只在**那一行的 extra.cf** 里记下 QQ 侧的标识
+#   （不改 sticker 表结构、不新建表）。
+# ★ 权限边界（硬）：四个动作**一律只给主人或她本人（MASTER/SYSTEM）**，非主人一律拒
+#   （连"读清单"也拒 —— 它在不在 QQ 侧是账号侧的事实）。技能自己先判一道，权限表里另外
+#   给这四个 op 各写一行 Ban[ALLUSER]（两道都拒；少一道也拒）。
+#   cf_del 额外还要 **confirm 二次确认**（写 confirm: true 或 "yes"/"确认"），少这一项直接拒。
+# ★ 添加：目标是库里的 id / hash，或直接给 file（**必须是本机文件**：NapCat 的 add_custom_face
+#   要的是它能读到的本地表情文件；URL / fileid 形态直接拒 cf_need_local）。
+#   我们顺手把 md5 / file_size / file_name 一起算好传下去。
+#   幂等两道：① 本地账 —— 那一行的 extra.cf.md5 与本次相同 ⇒ sticker_cf_exists（一次 NapCat 都不打）；
+#             ② 远端账（尽力而为）—— 先问一次清单，命中同一个 md5 ⇒ sticker_cf_exists_remote。
+#   可选 desc：添加动作本身不吃描述，拿到 emoji_id + res_id 之后顺手改一次；拿不到就在回执里写
+#   desc=pending，让你改用 cf_desc。
+# ★ 删除：只认 res_id 与 md5（上游 delete_custom_face 的字段就是这些，没有 emoji_id）。
+#   库里那一行没记过 extra.cf ⇒ cf_not_linked（不拿 md5 猜一个去删）；删掉后只摘掉那一行的
+#   extra.cf，**不删本地那一行**（库里那张图还在）。
+# ★ 描述：desc 不长于 200 字；**先过内容闸**（标记族 / 内部事实行 / 红线词 —— 与出站同一套判据，
+#   判不动就拒），过了才交给 NapCat；出站那一层还有一道同样的闸，两层都不绕。
+# 自定义表情查重：on（默认）时 cf_add 添加前多问一次清单（那一道只可能"多问一次"，不会因此拒加）；
+#           写「关」（或 off/0/false/no/否）才省掉这一次询问。**缺这一行 / 写错值都按开处理**
+#           （失败方向 = 开：更不容易重复添加）。本地账那一道与它无关，永远生效。

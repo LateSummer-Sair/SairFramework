@@ -30,6 +30,12 @@ import sair.v4.kit.Str;
  *   <li>私聊里 {@code at} 无意义（受 {@code 私聊不@} 管，默认丢），引用照做；</li>
  *   <li>成对写法（{@code <at qq="1">名字</at>} / {@code <quote id="1">原文</quote>}）整段吃掉，
  *       不留内层文字，避免同一句话出现两遍；</li>
+ *   <li>取值容忍写法差异：{@code id="5"} / {@code id='5'} / {@code id=5} / {@code id=5/}（自闭合不带空格）
+ *       / {@code id=" 5 "}（引号内两侧空白）都认；自闭合的斜杠不算号码的一部分，
+ *       带其它属性（{@code <quote id="5" foo="bar"/>}）照旧；标签体是引号感知的（属性值里带 {@code >}
+ *       不会把标签截半）；号码判据（十进制且 &gt;0）一个字都不放松，取值里有垃圾
+ *       （{@code id="5 /"} / {@code id="5/ >"} / {@code id="5/6"}）⇒ <b>整段丢掉</b>：
+ *       既不产码，也不把 {@code "/>} 这类残片当正文漏出去；</li>
  *   <li>异常全吞：出问题就返回 {@code null}（正文保持原样），<b>绝不拖垮一条发送</b>。</li>
  * </ul>
  */
@@ -39,21 +45,41 @@ public class AtPickStage implements OutboundStage {
     private static final String DEF_AT = "[CQ:at,qq={qq}]";
     private static final String DEF_QT = "[CQ:reply,id={id}]";
 
+    /*
+     * 取值口径（四条正则共用同一段：("[^"]*"|'[^']*'|[^\s>"'/]*)，标签体一律「引号感知」，
+     * 改一处必须四处同改 —— 基板直连路 qq\ChatMarkers 里是同一份拷贝）。
+     *
+     * 标签体 = (?:[^>"']|"[^"]*"|'[^']*')*：属性值里带 > 不会把标签截半
+     * （<quote id="5" title="a > b"/> 是**一个**完整标签，不是到第一个 > 就收口，
+     * 所以不会剩下 "/> 之类当正文漏出去）；引号必须成对。
+     * 取值段 = "[^"]*"（整段双引号）/ '[^']*'（整段单引号）/ 裸词（不含空白、引号、>、/）；
+     * 值后面若还跟着 /，只有当它是自闭合的那一个（/ 紧跟 >）才作数。
+     *
+     * 认：id="5" / id='5' / id=5 / id=5/（自闭合不带空格）/ id=" 5 " / id=" 5" / id="5 "
+     *     （引号内两侧空白）/ id = "5" / 成对 <quote id="5">原文</quote> /
+     *     带其它属性 <quote id="5" foo="bar"/> / 大小写混写。
+     * 不认（整段 fail-closed：标记跟它自己的字节一起删掉 —— 既不产码，也不把残片当正文漏出去）：
+     *     <quotation id="5"/>（标签名要精确）、<quote idx="5"/>（不是 id 这个词）、
+     *     正文里孤立的 id=5（没有标记就没有这一步）；号码不合法（空 / 0 / 非十进制 / 超长 /
+     *     全角数字）；取值里有垃圾 —— id="5/"、id="5 /"、id="5/6"、id="5 6"、id="5/ >"、id="5>"
+     *     都丢掉：宁可没有引用，也不把 "5 /" 截断成 5 那种「看起来对、其实是猜的」号码。
+     * <at> 的两条同形，键是 qq。
+     */
     /** 成对写法：{@code <at qq="1">名字</at>}（整段吃掉）。 */
     private static final Pattern AT_PAIR = Pattern.compile(
-            "<at\\b[^>]*\\bqq\\s*=\\s*[\"']?([^\"'\\s>]*)[\"']?[^>]*>[\\s\\S]*?</at\\s*>",
+            "<at\\b(?:[^>\"']|\"[^\"]*\"|'[^']*')*\\bqq\\s*=\\s*(\"[^\"]*\"|'[^']*'|[^\\s>\"'/]*)\\s*(?!/(?!>))(?:[^>\"']|\"[^\"]*\"|'[^']*')*>[\\s\\S]*?</at\\s*>",
             Pattern.CASE_INSENSITIVE);
     /** 自闭合/单标签写法：{@code <at qq="1"/>}。 */
     private static final Pattern AT_ONE = Pattern.compile(
-            "<at\\b[^>]*\\bqq\\s*=\\s*[\"']?([^\"'\\s>]*)[\"']?[^>]*/?>",
+            "<at\\b(?:[^>\"']|\"[^\"]*\"|'[^']*')*\\bqq\\s*=\\s*(\"[^\"]*\"|'[^']*'|[^\\s>\"'/]*)\\s*(?!/(?!>))(?:[^>\"']|\"[^\"]*\"|'[^']*')*/>",
             Pattern.CASE_INSENSITIVE);
     /** 引用的成对写法：{@code <quote id="1">原文</quote>}（{@code reply} 同名同义）。 */
     private static final Pattern QT_PAIR = Pattern.compile(
-            "<(?:quote|reply)\\b[^>]*\\bid\\s*=\\s*[\"']?([^\"'\\s>]*)[\"']?[^>]*>[\\s\\S]*?</(?:quote|reply)\\s*>",
+            "<(?:quote|reply)\\b(?:[^>\"']|\"[^\"]*\"|'[^']*')*\\bid\\s*=\\s*(\"[^\"]*\"|'[^']*'|[^\\s>\"'/]*)\\s*(?!/(?!>))(?:[^>\"']|\"[^\"]*\"|'[^']*')*>[\\s\\S]*?</(?:quote|reply)\\s*>",
             Pattern.CASE_INSENSITIVE);
     /** 引用的自闭合写法：{@code <quote id="1"/>}。 */
     private static final Pattern QT_ONE = Pattern.compile(
-            "<(?:quote|reply)\\b[^>]*\\bid\\s*=\\s*[\"']?([^\"'\\s>]*)[\"']?[^>]*/?>",
+            "<(?:quote|reply)\\b(?:[^>\"']|\"[^\"]*\"|'[^']*')*\\bid\\s*=\\s*(\"[^\"]*\"|'[^']*'|[^\\s>\"'/]*)\\s*(?!/(?!>))(?:[^>\"']|\"[^\"]*\"|'[^']*')*/>",
             Pattern.CASE_INSENSITIVE);
 
     @Override
@@ -133,12 +159,24 @@ public class AtPickStage implements OutboundStage {
 
     /** 十进制校验：不合法的号码返回 {@code null}（标记丢掉）。 */
     private static String num(String raw) {
-        String s = Str.trim(Str.nz(raw));
+        String s = unquote(raw);
         if (s.isEmpty() || s.length() > 20) return null;
         for (int i = 0; i < s.length(); i++) {
             if (s.charAt(i) < '0' || s.charAt(i) > '9') return null;
         }
         if (s.charAt(0) == '0') return null;
+        return s;
+    }
+
+    /** 取值段是「整段取值」（可能带成对引号）：剥掉外面那一对引号与两侧空白，再判号码。 */
+    private static String unquote(String raw) {
+        String s = Str.trim(Str.nz(raw));
+        if (s.length() >= 2) {
+            char q = s.charAt(0);
+            if ((q == '"' || q == '\'') && s.charAt(s.length() - 1) == q) {
+                s = Str.trim(s.substring(1, s.length() - 1));
+            }
+        }
         return s;
     }
 

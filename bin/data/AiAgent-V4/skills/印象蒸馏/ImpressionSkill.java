@@ -49,21 +49,24 @@ import sair.v4.store.Store;
  * <p>{@link #get} / {@link #list} 是读，但它们<b>强制取自己 qq</b>，
  * {@link #refresh} 同理（非主人不给定向到别人）：定向别人这件事本身由归属判定管，不由 op 判定管。</p>
  *
- * <h3>★ 她自己的标记行（P1-selfsee）：读 grouplog/dialog 的每个读点先过一道判据</h3>
+ * <h3>★ 她自己的标记行（P1-selfsee）+ 外部来源行（能力②/D1）：读 grouplog/dialog 的每个读点先过一道判据</h3>
  * <p>基板 P0-1 之后 {@code grouplog}/{@code dialog} 里会多出她<b>自己发出去</b>的那一行「标记行」
  * （{@code content} 形如 {@code [我发的 图片 msg_id=<id>]} / {@code [我发的 msg_id=<id>] <正文>}，
- * {@code extra.self=true}）。它是<b>机器写的标记行 —— 不是群友发言，也不是她的人格素材</b>。
- * 本技能四个读点分开处置（判据只有 {@link #isSelfMark} 一处）：</p>
+ * {@code extra.self=true}）。它是<b>机器写的标记行 —— 不是群友发言，也不是她的人格素材</b>。</p>
+ * <p>基板 D1（2026-09-28）之后，同一个 {@code selfId} 下<b>另一个机器人服务</b>发出去的消息也会
+ * 落进这两张表（{@code extra.foreign=true}，"她不是这个账号的唯一使用者"）：它<b>同样</b>不是这个人的话，
+ * 也<b>同样</b>不许当素材。<b>两种形状合流成一处判据</b>（{@link #notHisWords} =
+ * {@link #isSelfMark} 或 {@link #isForeign}），本技能四个读点分开处置：</p>
  * <ol>
- *   <li>{@link #pick}（挑人候选池）：<b>① 整行跳过</b> —— 否则 {@code user_id=self_id} 的标记行
+ *   <li>{@link #pick}（挑人候选池）：<b>① 整行跳过</b> —— 否则 {@code user_id=self_id} 的标记行/外部行
  *       会让她自己变成一个「要蒸的人」；</li>
  *   <li>{@link #one}（按 {@code user_id} 取 {@code grouplog} 样本 ⇒ 问模型 ⇒ 写印象）：
- *       <b>① 整行跳过</b> —— 机器外壳不许进「人格/印象/气质」素材；</li>
+ *       <b>① 整行跳过</b> —— 机器外壳与别家机器人的话都不许进「人格/印象/气质」素材；</li>
  *   <li>{@link #dialogOf}（{@code dialog} 里 {@code qq:<id>} 的发言）：<b>① 整行跳过</b>
  *       （口径 {@code 对话角色: user}，标记行会不会被收取决于基板给的 {@code role}，所以按行判、不按 role 判）；</li>
  *   <li>{@link #nameOf}（按 {@code user_id} 取最近一条的 {@code nickname}）：<b>③ 照旧</b> ——
  *       它只读 {@code nickname} 列取一个<b>显示名</b>（不读 {@code content}、不喂模型、不算素材），
- *       而它是 {@code limit=1} 的「最近一条」：跳过标记行只会把名字降级成空串 ＝ 抹掉一个事实。</li>
+ *       而它是 {@code limit=1} 的「最近一条」：跳过只会把名字降级成空串 ＝ 抹掉一个事实。</li>
  * </ol>
  *
  * <h3>节流（跨重启不重置）</h3>
@@ -125,7 +128,7 @@ public class ImpressionSkill implements Skill, Hooked {
 
     /**
      * ★ P1「她自己的标记行」判据 —— <b>本技能唯一一处</b>（不许在业务逻辑里散写
-     * {@code if (content.startsWith(...))}）。
+     * {@code if (content.startsWith(...))}）。读点问的是 {@link #notHisWords}（它与外部来源行判据的合流处）。
      *
      * <p>基板 P0-1 落地后，她<b>自己发出去</b>的消息/图会在 {@code grouplog}（群）/
      * {@code dialog}（私聊）里补一行标记行：{@code content} =
@@ -159,6 +162,37 @@ public class ImpressionSkill implements Skill, Hooked {
         }
     }
 
+    /**
+     * ★ <b>外部来源行</b>判据（能力②，D1 2026-09-28）—— 与 {@link #isSelfMark} 同一族，也<b>只有这一处</b>。
+     *
+     * <p>同一个 QQ 账号（{@code selfId}）下另有机器人服务在发言，它们发出去的消息在这两张表里
+     * 与我们自己的行<b>逐字同形</b>（{@code user_id = selfId}），区别只在 {@code extra.foreign=true}
+     * （基板 {@code QqGateway.foreignEcho} 的唯一产法）。<b>它既不是群友发言，也不是她的人格素材</b>
+     * （而且它连"某个人"都不是）⇒ 与标记行一样整行跳过。</p>
+     *
+     * <p>判据只看 {@code extra.foreign}（内容伪造不出这个键）；解析不出来就当<b>没有它</b>。</p>
+     */
+    static boolean isForeign(JsonObject row) {
+        if (row == null) return false;
+        try {
+            JsonObject ex = rowExtra(row);
+            return ex != null && J.b(ex, "foreign", false);
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    /**
+     * 这一行是不是"<b>不是这个人说的话</b>"（两个判据的<b>唯一合流处</b>）：
+     * 她自己的标记行（{@link #isSelfMark}）或外部来源行（{@link #isForeign}）。
+     *
+     * <p>所有"把行当这个人的素材/候选"的读点都只问这一个方法 ⇒ 加一种"不是他的话"的形状时，
+     * 改动面就是这一个方法（不会再漏掉某个读点）。</p>
+     */
+    static boolean notHisWords(JsonObject row) {
+        return isSelfMark(row) || isForeign(row);
+    }
+
     /** {@code extra} 列（TEXT 的 JSON 串，或已被 {@code Db.decode} 解析成对象）；解析不出来返回 null。 */
     private static JsonObject rowExtra(JsonObject row) {
         try {
@@ -172,14 +206,14 @@ public class ImpressionSkill implements Skill, Hooked {
     }
 
     /**
-     * 去掉标记行（{@link #isSelfMark}）。
-     * <p>一个标记行都没有时<b>原样返回入参</b>（同一引用、同一顺序）—— 这就是「没有标记行 ⇒ 与改动前逐字等价」。</p>
+     * 去掉<b>不是这个人说的话</b>的行（{@link #notHisWords}：她自己的标记行 + 外部来源行）。
+     * <p>一个都不命中时<b>原样返回入参</b>（同一引用、同一顺序）—— 这就是「没有这类行 ⇒ 与改动前逐字等价」。</p>
      */
     static List<JsonObject> withoutSelfMarks(List<JsonObject> rows) {
         if (rows == null || rows.isEmpty()) return rows;
         boolean has = false;
         for (int i = 0; i < rows.size(); i++) {
-            if (isSelfMark(rows.get(i))) {
+            if (notHisWords(rows.get(i))) {
                 has = true;
                 break;
             }
@@ -188,7 +222,7 @@ public class ImpressionSkill implements Skill, Hooked {
         List<JsonObject> out = new ArrayList<JsonObject>();
         for (int i = 0; i < rows.size(); i++) {
             JsonObject r = rows.get(i);
-            if (!isSelfMark(r)) out.add(r);
+            if (!notHisWords(r)) out.add(r);
         }
         return out;
     }
@@ -539,7 +573,7 @@ public class ImpressionSkill implements Skill, Hooked {
         r.name = w.name;
         Store s = h.store();
         List<JsonObject> gl = s.list("grouplog", J.obj("user_id", w.qq), c.perPerson, "ts DESC");
-        gl = withoutSelfMarks(gl);            // ★ P1-selfsee：标记行不进「人格素材」取样
+        gl = withoutSelfMarks(gl);            // ★ P1+能力②：她的标记行 / 外部来源行都不进「人格素材」取样
         List<JsonObject> dlg = dialogOf(s, c, w.qq);
         r.sampled = gl.size() + dlg.size();
         if (r.sampled < c.minMsgs) {
@@ -641,7 +675,7 @@ public class ImpressionSkill implements Skill, Hooked {
     private static List<JsonObject> dialogOf(Store s, Cfg c, long qq) {
         List<JsonObject> out = new ArrayList<JsonObject>();
         if (c.roles.isEmpty()) {
-            // ★ P1-selfsee：她自己的标记行整行跳过（机器外壳不是这个人说的话）
+            // ★ P1+能力②：她自己的标记行、外部来源行整行跳过（都不是这个人说的话）
             out.addAll(withoutSelfMarks(s.list("dialog", J.obj("session", SESSION_QQ + qq), c.perPerson, "ts DESC")));
         } else {
             for (String role : c.roles) {
@@ -755,7 +789,7 @@ public class ImpressionSkill implements Skill, Hooked {
         List<JsonObject> rows = s.list("grouplog", null, Math.max(200, c.cands * 4), "ts DESC");
         LinkedHashMap<Long, String> pool = new LinkedHashMap<Long, String>();
         for (JsonObject r : rows) {
-            if (isSelfMark(r)) continue;                              // ★ P1-selfsee：标记行不许让"她"进候选池
+            if (notHisWords(r)) continue;                             // ★ P1+能力②：她自己的标记行 / 外部来源行都不许进候选池
             long qq = J.l(r, "user_id", 0L);
             if (qq <= 0L || pool.containsKey(Long.valueOf(qq))) continue;
             pool.put(Long.valueOf(qq), Str.nz(J.s(r, "nickname", "")));

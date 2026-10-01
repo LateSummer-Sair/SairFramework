@@ -195,7 +195,8 @@ public class EmotionSkill implements Skill, Hooked {
         if (s == null) return;
         // 本插件不提供工具（没有 op 可判）：自主钩子跑在 SYSTEM 主体上，读写自己的表恒放行。
         long now = payload == null ? 0L : J.l(payload, "ts", 0L);
-        if (now <= 0L) now = System.currentTimeMillis();
+        // ★ 批 15 / 2026-09-26：基板 tick 没给 ts 时的兜底也走唯一接缝（默认 = 真实墙上时钟）。
+        if (now <= 0L) now = EmotionMood.nowMs();
         int n = EmotionState.decayAll(s, c, now);
         try {
             int gridN = EmotionMood.onTimer(s, c, now);
@@ -260,7 +261,10 @@ public class EmotionSkill implements Skill, Hooked {
      * 以本地时钟为准 —— 事件时间由上游机器给，跨机部署时可能是别的钟。
      */
     private static long eventTime(Ev e, EmotionCfg c) {
-        long local = System.currentTimeMillis();
+        // ★ 批 15 / 2026-09-26：这一句是"本地现在"，必须与状态机同一个接缝 —— 否则注入/平移时钟时，
+        //   事件时间（payload time，按接缝给）与本地钟（裸时钟）差得超过「时钟容差秒」⇒ 每次都退回
+        //   裸本地钟，整条链又变回时钟相关。默认（没注入）= 真实墙上时钟，生产与改前逐字节相同。
+        long local = EmotionMood.nowMs();
         long ev = 0L;
         try {
             ev = e.time() * 1000L;

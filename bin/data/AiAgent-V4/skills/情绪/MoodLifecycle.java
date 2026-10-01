@@ -49,7 +49,10 @@ public class MoodLifecycle implements LifecycleHook {
             Store s = selfStore(h);
             if (s == null) return;
             long gid = b.group() ? b.groupId() : 0L;
-            EmotionMood.noteSelfSend(s, c, qq, gid, System.currentTimeMillis());
+            // ★ 批 15 / 2026-09-26：生命周期这一层也走唯一接缝（EmotionMood.nowMs()）——
+            //   "她说了几条 / 最后一次说话是什么时候"与状态机写在同一个时刻上。
+            //   默认（没注入）= 真实墙上时钟，生产与改前逐字节相同。
+            EmotionMood.noteSelfSend(s, c, qq, gid, EmotionMood.nowMs());
             EmotionMood.flush(s);
         } catch (Throwable ignored) {
         }
@@ -71,7 +74,7 @@ public class MoodLifecycle implements LifecycleHook {
             Store s = selfStore(h);
             if (s == null) return;
             long gid = b.group() ? b.groupId() : 0L;
-            long now = System.currentTimeMillis();
+            long now = EmotionMood.nowMs();                    // ★ 批 15：同一个接缝（默认 = 真实时钟）
             boolean fail = EmotionMood.failOf(c, reply);
             if (fail) EmotionMood.noteFail(s, c, qq, gid, true);
             String tag = EmotionMood.tagOf(c, reply);

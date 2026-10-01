@@ -41,7 +41,7 @@ import sair.v4.store.Store;
  * {@code on_timer} 与她自己这条路的主体是 {@code SYSTEM}，恒放行）。
  * 生成的技能只做"查库 + 回话"（读 note 库里的那一条经验），不执行命令、不读写文件。</p>
  *
- * <h3>★ 她自己的标记行（P1-selfsee）：素材面（dialog + grouplog）整行跳过</h3>
+ * <h3>★ 她自己的标记行（P1-selfsee）+ 外部来源行（能力②/D1）：素材面（dialog + grouplog）整行跳过</h3>
  * <p>基板 P0-1 之后 {@code dialog}/{@code grouplog} 里会多出她<b>自己发出去</b>的那一行「标记行」
  * （{@code content} 形如 {@code [我发的 图片 msg_id=<id>]} / {@code [我发的 msg_id=<id>] <正文>}，
  * {@code extra.self=true}）。它是<b>机器写的标记行 —— 不是群友发言，也不是给模型看的素材</b>：
@@ -49,14 +49,31 @@ import sair.v4.store.Store;
  * 对标记行做 <b>① 整行跳过</b> —— 否则模型会拿机器外壳去蒸，蒸出「回复 {@code [我发的 msg_id=…]}」
  * 这种垃圾经验写进共享 {@code note} 库（还会挤掉真素材的名额、并让"内容去重"多留一条重复行）。
  * 判据只有 {@link #isSelfMark} 一处。</p>
+ * <p>基板 D1（2026-09-28）之后同一个 {@code selfId} 下<b>另一个机器人服务</b>发出去的消息
+ * （{@code extra.foreign=true}）也会出现在这两张表里：它<b>同样</b>不是群友发言、也不是人的话 ⇒
+ * 处置<b>逐字相同</b>（同样整行跳过）。两个判据的合流处只有 {@link #notHuman} 一处，
+ * 素材面的两处调用都问它。</p>
  * <p>为什么不担心"把她说过的话抹掉"：私聊里她自己的正文另有基板写的 {@code role=assistant} 那一行
  * （出站本来就落库），群聊那一行则仍留在 {@code grouplog} 与她自己的窗口里 —— 事实面一行没少，
  * 去掉的只是"喂给蒸馏模型的素材"这一层。</p>
  *
  * <p>节流：kv {@code distill:experience:last}（上次开跑的时间戳）。上一轮成功 → {@code 间隔小时}；
  * 上一轮失败 → 只等 {@code 失败重试分钟}。未到间隔直接 return，绝不每 20 秒打一次模型。</p>
+ *
+ * <p><b>日志闸门（2026-09-27，甲方反馈"日志比较频繁"）</b>：未到间隔时那一行
+ * 「还没到间隔（还需 …），本轮不动模型」原来是<b>每个 tick 都打</b>（tick 默认 20 秒 ⇒ 实测
+ * 约 176 行/小时、一天四千多行）。它证明的是"没动模型"，本身没有信息量，于是一天里同一句话说四千遍。
+ * 现在照姐妹技能 {@code 印象蒸馏} 的同一道闸门：
+ * <b>本进程第一条必打，之后最多每小时一条</b>（按小时桶去重）。判定与行为<b>一个字没改</b> ——
+ * 只是同一句话不再重复四千遍；真的开跑那一轮、失败、提技等行照旧每次都打。</p>
  */
 public class ExperienceSkill implements Skill, Hooked {
+
+    /**
+     * 「还没到间隔」那行的去重闸门：当前小时桶（{@code 本进程第一条必打}）。
+     * <p>{@link Long#MIN_VALUE} = 本进程还没打过；换小时才允许再打一次。</p>
+     */
+    private static volatile long waitLoggedBucket = Long.MIN_VALUE;
 
     /** 技能名（= 文件夹名 = md 文件名），也是 note 行 source 列的值。 */
     private static final String NAME = "经验蒸馏";
@@ -123,6 +140,28 @@ public class ExperienceSkill implements Skill, Hooked {
         }
     }
 
+    /**
+     * ★ <b>外部来源行</b>判据（能力②，D1 2026-09-28）：同一个 QQ 账号下<b>另一个机器人服务</b>
+     * 发出去的消息（{@code extra.foreign=true}，基板 {@code QqGateway.foreignEcho} 的唯一产法）。
+     *
+     * <p>它在本技能里的处置与标记行<b>逐字相同</b>：不是群友发言、不是这个人说的话、不许进素材
+     * （连"某个人的话"都不是）。判据只看 {@code extra.foreign}（内容伪造不出这个键）。</p>
+     */
+    static boolean isForeign(JsonObject row) {
+        if (row == null) return false;
+        try {
+            JsonObject ex = rowExtra(row);
+            return ex != null && J.b(ex, "foreign", false);
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    /** 这一行是不是"<b>不是人的话</b>"（两个判据的唯一合流处：她的标记行 / 外部来源行）。 */
+    static boolean notHuman(JsonObject row) {
+        return isSelfMark(row) || isForeign(row);
+    }
+
     /** {@code extra} 列（TEXT 的 JSON 串，或已被 {@code Db.decode} 解析成对象）；解析不出来返回 null。 */
     private static JsonObject rowExtra(JsonObject row) {
         try {
@@ -136,14 +175,14 @@ public class ExperienceSkill implements Skill, Hooked {
     }
 
     /**
-     * 去掉标记行（{@link #isSelfMark}）。
-     * <p>一个标记行都没有时<b>原样返回入参</b>（同一引用、同一顺序）—— 这就是「没有标记行 ⇒ 与改动前逐字等价」。</p>
+     * 去掉"不是人的话"的行（{@link #notHuman}：她的标记行 + 外部来源行）。
+     * <p>一个都不命中时<b>原样返回入参</b>（同一引用、同一顺序）—— 这就是「没有这类行 ⇒ 与改动前逐字等价」。</p>
      */
     static List<JsonObject> withoutSelfMarks(List<JsonObject> rows) {
         if (rows == null || rows.isEmpty()) return rows;
         boolean has = false;
         for (int i = 0; i < rows.size(); i++) {
-            if (isSelfMark(rows.get(i))) {
+            if (notHuman(rows.get(i))) {
                 has = true;
                 break;
             }
@@ -152,7 +191,7 @@ public class ExperienceSkill implements Skill, Hooked {
         List<JsonObject> out = new ArrayList<JsonObject>();
         for (int i = 0; i < rows.size(); i++) {
             JsonObject r = rows.get(i);
-            if (!isSelfMark(r)) out.add(r);
+            if (!notHuman(r)) out.add(r);
         }
         return out;
     }
@@ -222,7 +261,12 @@ public class ExperienceSkill implements Skill, Hooked {
             if (!c.enabled) return;
             long wait = gate(h, c);
             if (wait > 0) {
-                log(h, "还没到间隔（还需 " + wait + "ms），本轮不动模型");
+                // 日志闸门：本进程第一条必打，之后最多每小时一条（判定与行为不受影响）。
+                long bucket = System.currentTimeMillis() / 3600_000L;
+                if (waitLoggedBucket == Long.MIN_VALUE || bucket != waitLoggedBucket) {
+                    waitLoggedBucket = bucket;
+                    log(h, "还没到间隔（还需 " + wait + "ms），本轮不动模型");
+                }
                 return;
             }
             round(h, c, "timer");
@@ -735,7 +779,7 @@ public class ExperienceSkill implements Skill, Hooked {
         Set<String> seen = new LinkedHashSet<String>();
         SimpleDateFormat df = new SimpleDateFormat("MM-dd HH:mm");
         for (JsonObject row : dlg) {
-            if (isSelfMark(row)) continue;            // ★ P1-selfsee：标记行不进素材（① 整行跳过）
+            if (notHuman(row)) continue;              // ★ P1+能力②：标记行 / 外部来源行都不进素材（① 整行跳过）
             String text = Str.cut(Str.oneLine(J.s(row, "content", "")), c.maxChars);
             if (Str.blank(text)) continue;
             String key = norm(text);
@@ -748,7 +792,7 @@ public class ExperienceSkill implements Skill, Hooked {
                     "{text}", text)));
         }
         for (JsonObject row : gl) {
-            if (isSelfMark(row)) continue;            // ★ P1-selfsee：标记行不进素材（① 整行跳过）
+            if (notHuman(row)) continue;              // ★ P1+能力②：标记行 / 外部来源行都不进素材（① 整行跳过）
             String text = Str.cut(Str.oneLine(J.s(row, "content", "")), c.maxChars);
             if (Str.blank(text)) continue;
             String key = norm(text);

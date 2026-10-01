@@ -3,18 +3,22 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
+import java.lang.reflect.Method;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+import sair.v4.auth.Caller;
 import sair.v4.kit.J;
 import sair.v4.kit.Out;
 import sair.v4.kit.Str;
 import sair.v4.qq.Ev;
+import sair.v4.skill.FavorView;
 import sair.v4.skill.Host;
 import sair.v4.store.Store;
 
@@ -46,6 +50,10 @@ import sair.v4.store.Store;
  * <h3>时间常数只有一个</h3>
  * <p>网格 {@code slot = floor(now / 20 分钟)}（墙上时钟<b>固定网格</b>，不是滑动窗口）：
  * {@code slot} 一变 ⇒ 状态回 {@code calm} + 计数清零，<b>状态变化不刷新网格</b>。</p>
+ *
+ * <p><b>批 15 / 2026-09-26</b>：本类所有读墙上时钟的地方都走 {@link #nowMs()}（可注入的"现在"，
+ * 生产默认 = 真实墙上时钟）—— 于是「疲惫」那条时段门（{@code 深夜-起时}/{@code 深夜-止时}）
+ * 能在夹具里被钉死，不会出现"白天绿、夜里红"。</p>
  */
 public final class EmotionMood {
 
@@ -66,7 +74,30 @@ public final class EmotionMood {
     /** 第 6 档「罢工」（情绪 v2）：只骂人、不干活；从 {@code angry} 升上来。 */
     public static final String S_STRIKE = "strike";
 
-    private static final String[] STATES = {S_CALM, S_ANGRY, S_HAPPY, S_SAD, S_LETDOWN, S_STRIKE};
+    // ---- 8 个「轻态」（情绪 v3，2026-09-26 甲方令「加入更多拟人的情绪状态」）----
+    //   码一律 ASCII（与既有 6 档同风格）；中文名 / 语气 / 范例 / 边界 / 触发名全部走 prompt.md
+    //   的既有动态族（`状态-<码>` / `语气-<码>` / `范例-<码>` / `边界-<码>` / `触发名-<码>`），
+    //   判定信号也只用既有的五种（词表命中 / 时段 / 基板 favor / 既有档位 / 本轮正文），
+    //   **不新增随机、不新增判定源、不新增 kv 字段**（见 {@link #lite}）。
+    /** 戒备：低好感 + 要隐私/敏感话题/陌生人试探。 */
+    public static final String S_CAREFUL = "careful";
+    /** 委屈：被误解 / 被凶 / 被冤枉。 */
+    public static final String S_WRONGED = "wronged";
+    /** 心虚：她答错了、被指出错。 */
+    public static final String S_GUILTY = "guilty";
+    /** 吃醋：当着她的面夸别人（本轮「夸」+「第三方指称」同句）。 */
+    public static final String S_JEALOUS = "jealous";
+    /** 得意：被夸/被捧/办成事。 */
+    public static final String S_PROUD = "proud";
+    /** 害羞：被直球夸 / 被调情。 */
+    public static final String S_SHY = "shy";
+    /** 期待：他提到约定/约好的时间快到了。 */
+    public static final String S_EXPECT = "expect";
+    /** 疲惫：深夜 + 长聊/被连着盘。 */
+    public static final String S_TIRED = "tired";
+
+    private static final String[] STATES = {S_CALM, S_ANGRY, S_HAPPY, S_SAD, S_LETDOWN, S_STRIKE,
+            S_CAREFUL, S_WRONGED, S_GUILTY, S_JEALOUS, S_PROUD, S_SHY, S_EXPECT, S_TIRED};
 
     /** {@code 触发阈-strike} 的兜底默认值（写 N = 「超过 N 次」，与其余触发阈同一个口径）。 */
     private static final int DEF_STRIKE_TH = 3;
@@ -76,6 +107,60 @@ public final class EmotionMood {
 
     /** {@code 罢工平息条数} 的兜底默认值（连续几条"没有情绪信号"的消息就退到 angry）。 */
     private static final int DEF_STRIKE_QUIET = 3;
+
+    // ---- 敬重档（2026-09-26 甲方规格：好感度 >=700 ⇒ 不再对此人发怒 + 敬重口气）----
+    //   ★ 批 15 / 2026-09-26（GM 裁定「阈值以基板为准」）：">=" 后面那个数**只有一个旋钮** ——
+    //     基板配置 `favorNoAngerMin`；本技能那个键降级成**老 jar 的回退**（见 DEF_RESPECT / respectNeed）。
+
+    /**
+     * {@code 敬重档-好感度} 的兜底默认值（甲方规格的硬数字 700）。
+     * <p>与 {@code prompt.md} 那一行<b>同源</b>（改一处必须改两处），口径与 {@link EmotionCfg#DEF_BUDGET} 相同。</p>
+     *
+     * <p><b>★ 批 15 / 2026-09-26（GM 裁定「阈值以基板为准」）：这条线现在只有一个旋钮 —— 基板
+     * {@code favorNoAngerMin}。本常量（连带 {@code prompt.md} 里那个键）降级成**老 jar 的回退**：
+     * 基板值读得到就用基板的，读不到（类/方法不存在）才用这里的 700。读数在
+     * {@link #respectNeed(EmotionCfg)} 一处收口，判定仍然只有 {@link #respect} 那一处。</b></p>
+     */
+    public static final int DEF_RESPECT = 700;
+
+    /** {@code 敬重-标签} 的兜底（与 prompt.md 同源；她/主人可以改文案，判据不变）。 */
+    public static final String DEF_RESPECT_LABEL = "敬重";
+
+    /**
+     * {@code 敬重-行} 的兜底（{@code prompt.md} 读不出来时的下限，与那边<b>同源同文</b>，改一处必须改两处）。
+     * <p>可用占位符：{@code {档位}}（基板 {@code FavorView.levelName} 的原话）、{@code {favor}}（基板读数）、
+     * {@code {阈值}}。文案里刻意<b>不含</b> {@code 禁词-敬语} 的任何词（您/请问/很抱歉…）——
+     * 那一族只在 angry/strike 生效，而敬重档照样可能落在 angry 态上（见 {@code MoodStage.veto}）。</p>
+     */
+    public static final String DEF_RESPECT_LINE =
+            "他在我账上是「{档位}」（好感度 {favor}）：对这个人只发敬重、平稳的口气 —— "
+            + "不发火、不阴阳、不怼、不说脏话；就算他骂我、挑衅我，这一轮也不进生气/暴怒/罢工那种语气。";
+
+    /** 四个配置键名（只在源码里写一次，免得四处拼错；{@code prompt.md} 里逐键有说明）。 */
+    public static final String K_RESPECT_ON = "敬重档开关";
+    public static final String K_RESPECT_NEED = "敬重档-好感度";
+    public static final String K_RESPECT_LABEL = "敬重-标签";
+    public static final String K_RESPECT_LINE = "敬重-行";
+
+    // ---- 轻态（情绪 v3）的 5 个配置键名（{@code prompt.md} 里逐键有说明）----
+
+    /** 轻态总开关（{@code false} = 8 个新态一个都不进，整层回到 6 态）。 */
+    public static final String K_LITE_ON = "轻态开关";
+    /** 戒备的「低好感」门槛：基板 {@code FavorView.of(qq)} 低于它才算"低好感"。 */
+    public static final String K_LITE_SHY_FAVOR = "戒备-好感度";
+    /** 深夜时段的起（含）与止（不含）小时；{@code 起 > 止} = 跨零点（出厂 23→6）。 */
+    public static final String K_NIGHT_FROM = "深夜-起时";
+    public static final String K_NIGHT_TO = "深夜-止时";
+    /** 「长聊」判据：她自己连续说了几条（{@code Mood.selfSends}）。 */
+    public static final String K_TIRED_CHAT = "疲惫-长聊条数";
+
+    /** {@code 戒备-好感度} 的兜底（与 prompt.md 同源）。 */
+    private static final int DEF_LITE_FAVOR = 300;
+    /** {@code 深夜-起时}/{@code 深夜-止时} 的兜底（与 prompt.md 同源）。 */
+    private static final int DEF_NIGHT_FROM = 23;
+    private static final int DEF_NIGHT_TO = 6;
+    /** {@code 疲惫-长聊条数} 的兜底（与 prompt.md 同源）。 */
+    private static final int DEF_TIRED_CHAT = 3;
 
     // ---- 计分信号（下标 = 评估优先级；码写进日志的 trigger=） ----
     static final int G_INSULT = 0;
@@ -435,6 +520,39 @@ public final class EmotionMood {
         return now <= 0L ? 0L : (now / (min * 60000L));
     }
 
+    // ---- 可注入的「现在」（批 15 / 2026-09-26）----
+    //
+    // WHY：情绪里第一个**读墙上时钟**的判据是「疲惫」（`深夜-起时`/`深夜-止时` + `词-疲惫`）。
+    //   门禁当前与时钟无关（既有夹具正文都不命中疲惫词表），但"将来谁往夹具里写一句含疲惫词表的
+    //   正文，就会白天绿、夜里红"这件事必须能被**钉死** —— 所以给技能一个可注入的"现在"。
+    //   默认（没注入）= 真实墙上时钟，生产行为一个字不改。
+
+    /** 注入的「现在」（毫秒；{@code <=0} = 没注入 = 真实墙上时钟）。 */
+    private static volatile long CLOCK_MS = 0L;
+
+    /**
+     * <b>把「现在」钉成一个固定值</b>（毫秒；{@code <=0} = 撤销注入、回到真实墙上时钟）。
+     * <p>给夹具/探针用（本批：{@code tmp\v6-real\batch6\W15e}）：进程内任何一条 {@link #nowMs()} 都跟着它走，
+     * 于是"白天 12:00 vs 夜里 02:00"能在同一台机器上**逐条复现**。生产路径永远不调它。</p>
+     */
+    public static void setNowMs(long ms) { CLOCK_MS = ms; }
+
+    /** 注入的「现在」（{@code <=0} = 没注入）；只读，给口径回执用。 */
+    public static long injectedNowMs() { return CLOCK_MS; }
+
+    /**
+     * <b>现在是什么时候</b>（毫秒）：注入值优先，否则真实墙上时钟。
+     * <p>本类里**所有**读墙上时钟的地方都走这里（{@code on_message} 的 wall / {@code on_notice} /
+     * {@code noteTag} / 事件时间兜底）。<b>新加读时钟的点也必须走它</b>，否则"钉住时间"这件事会漏。</p>
+     * <p>参数里已经带着时刻的地方（{@code onMessage(...,now)} / {@code onTimer(...,now)} /
+     * {@code noteSelfSend(...,now)}）仍然用参数：那是调用方给的**事件时间**（或它自己的墙上时钟），
+     * 与"本类看见的现在"是两件事 —— 见 {@code onMessage} 里"网格只跟墙上时钟走"那段注释。</p>
+     */
+    public static long nowMs() {
+        long v = CLOCK_MS;
+        return v > 0L ? v : System.currentTimeMillis();
+    }
+
     static String iso(long ms) {
         try {
             return new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX").format(new Date(ms));
@@ -454,7 +572,52 @@ public final class EmotionMood {
         if (S_ANGRY.equals(state)) return 3;
         if (S_SAD.equals(state)) return 2;
         if (S_LETDOWN.equals(state)) return 1;
+        // ---- 轻态（v3）的严重度：strike/angry/sad/letdown 那四个值**一个字都没动**（探针按字面钉 angry=3）。
+        //   这里只给"从没出现过的新码"一个值；它只影响新码自己的事实行 `level` 字段与 dwellOk 的
+        //   向上/向下判定（`from` 是新码才会读到），既有 6 态的路径逐字节不变。
+        if (S_CAREFUL.equals(state)) return 2;      // 戒备 / 委屈 / 吃醋：比 letdown(1) 重
+        if (S_WRONGED.equals(state)) return 2;
+        if (S_JEALOUS.equals(state)) return 2;
+        if (S_GUILTY.equals(state)) return 1;       // 心虚 / 期待 / 得意 / 害羞 / 疲惫：与 letdown 同档
+        if (S_EXPECT.equals(state)) return 1;
+        if (S_PROUD.equals(state)) return 1;
+        if (S_SHY.equals(state)) return 1;
+        if (S_TIRED.equals(state)) return 1;
         return 0;
+    }
+
+    /**
+     * <b>「谁压谁」的优先级梯子</b>（2026-09-26 GM 已钉死的 14 态优先级；<b>只有这一个来源</b>）。
+     *
+     * <p>GM 原话的次序：{@code 罢工 > 敬重（对该人 favor>=阈值；阈值 = 基板 favorNoAngerMin，批 15）> 发怒 > 戒备 > 委屈 ≈ 吃醋 > 心虚 >
+     * 失落 > 期待/得意/害羞 > 疲惫 > 开心 > 平静}。落地成整数之后，{@link #decide} 用它做
+     * <b>「一格」裁决</b>（同一轮只有一个状态赢，绝不叠加）。</p>
+     *
+     * <p><b>两处必须写清的落差</b>（都不改这个梯子，如实记在报告里）：</p>
+     * <ol>
+     *   <li>GM 那张表里<b>没有「伤心」（sad）</b>。它是既有的第 4 档（被贬低攒出来的），
+     *       我把它插在<b>发怒之后、戒备之前</b>（11）—— 依据是既有的 {@link #levelOf}：
+     *       angry(3) &gt; sad(2) &gt; letdown(1)，且 sad 是"负向态"，不该被一个轻态顶掉。</li>
+     *   <li><b>敬重不是状态</b>（K7 的落点是语气面）：它排在 12 与 11 之间，实现方式是
+     *       "进敬重档时<b>不让任何轻态进来</b>"（{@link #lite} 的 {@code respOn} 前置判）——
+     *       于是敬重照样压过发怒与下面所有轻态（K7 的成果一个字没改）。</li>
+     * </ol>
+     */
+    static int rank(String state) {
+        if (S_STRIKE.equals(state)) return 13;
+        if (S_ANGRY.equals(state)) return 12;
+        if (S_SAD.equals(state)) return 11;         // GM 表里没有它：插在发怒之后（见上）
+        if (S_CAREFUL.equals(state)) return 10;     // 戒备
+        if (S_WRONGED.equals(state)) return 9;      // 委屈 ≈ 吃醋：同档，先判委屈（见 lite 的判序）
+        if (S_JEALOUS.equals(state)) return 9;      // 吃醋
+        if (S_GUILTY.equals(state)) return 8;       // 心虚
+        if (S_LETDOWN.equals(state)) return 7;      // 失落
+        if (S_EXPECT.equals(state)) return 6;       // 期待 / 得意 / 害羞：同档
+        if (S_PROUD.equals(state)) return 6;
+        if (S_SHY.equals(state)) return 6;
+        if (S_TIRED.equals(state)) return 5;        // 疲惫
+        if (S_HAPPY.equals(state)) return 4;        // 开心
+        return 3;                                   // 平静（含一切读不出来的码）
     }
 
     static String norm(String s) {
@@ -494,7 +657,7 @@ public final class EmotionMood {
         if (s == null || c == null || ev == null || ev.isEmpty()) return r;
         long qq = ev.userId();
         if (qq <= 0L) return r;
-        long evNow = now > 0L ? now : System.currentTimeMillis();     // 事件时间（只给"间隔/被晾"用）
+        long evNow = now > 0L ? now : nowMs();                        // ★ 批 15：兜底也走接缝（默认=真实时钟）
         long gid = ev.groupId() > 0L ? ev.groupId() : 0L;
         String scopeId = scopeOf(gid, qq);
         // ★ 网格只跟**墙上时钟**走，不跟"这条消息的事件时间"走。
@@ -502,7 +665,7 @@ public final class EmotionMood {
         //   而 on_message 用的是事件时间（可能是上游机器给的、可能比本地早很多）。
         //   两者混用会让网格**往回跳**，于是网格要么被反复重置、要么永远重置不了。
         //   事件时间仍然有用——它只用来算"被晾了多久/间隔"，不参与网格。
-        long wall = System.currentTimeMillis();
+        long wall = nowMs();                    // ★ 批 15：可注入的"现在"（默认 = 真实墙上时钟）
         long slot = slotOf(wall, c);
         synchronized (lockOf(scopeId)) {
             Mood m = load(s, scopeId);
@@ -645,8 +808,16 @@ public final class EmotionMood {
             valid[G_INTEREST] = valid[G_INTEREST] && sig.interest;
             valid[G_BELITTLE] = sig.belittle;
             valid[G_QUIET] = m.count("quiet") > 0;
+            // ---- ★ v3 轻态（6 态 → 14 态）：先算出"这一条消息想把她带进哪个轻态"（至多一个），
+            //   再把它交给 decide() 与现场的高优先级态**比一个 rank**（"一格"，不叠加）。
+            //   判据全部是既有信号；敬重档进档时整层让位（敬重 > 全部轻态，K7 的成果一个字没改）。
+            boolean respOn = respect(c, h, null, qq).on;
+            Lite lt = lite(c, h, m, text, wall, qq, sig, fpSeen, respOn);
+            String fromD = m.state;
             // ---- 评估（唯一结论）
-            decide(m, c, r, wall, qq, valid, praiseOk, fp, fpSeen, sig);
+            decide(m, c, r, wall, qq, valid, praiseOk, fp, fpSeen, sig, lt);
+            // ---- 轻态口径回执（一行 dim；只在真有候选时打，绝不进情绪块 —— A21 靠它）
+            if (Str.has(lt.code)) traceLite(h, scopeId, lt, fromD, m.state);
             // ---- ★ 第九轮（GM 令 A1）：**转述场景不锁人** ----
             // 本条入站消息里出现**第三方指称**（`[提及 qq=X]`，X 既不是她自己、也不是说话人；
             // 或者带一个 `[引用 msg_id=…]` 段）⇒ 这一句很可能是"**转述别人骂我**"
@@ -782,6 +953,167 @@ public final class EmotionMood {
         return v < 0 ? 0 : v;
     }
 
+    // ================================================================ ①b 轻态（情绪 v3：6 态 → 14 态）
+
+    /**
+     * 一次轻态判定的结果（{@link #lite} 的返回）。
+     * <p>{@code code} 为空串 = 这一轮**不进任何轻态**（这也是"轻态开关关掉/读不到好感/没命中"的表示）；
+     * {@code why} 只用于<b>口径回执</b>（一行 dim，见 {@link #traceLite}），<b>绝不进情绪块</b>。</p>
+     */
+    public static final class Lite {
+        /** 中选的轻态码（{@link #S_CAREFUL} … {@link #S_TIRED}；空串 = 没有）。 */
+        public String code = "";
+        /** 为什么（人话，进回执）。 */
+        public String why = "";
+    }
+
+    /**
+     * <b>轻态判定</b>（情绪 v3，2026-09-26 甲方令「加入更多拟人的情绪状态进去，原理同愤怒情绪一样
+     * 可以轻度干涉设定」）：<b>至多返回一个</b>轻态码。
+     *
+     * <h3>只用既有信号（一个都不新造）</h3>
+     * <ul>
+     *   <li>{@code 词-<标签>} 词表命中（既有「关键词表」机制，热改即生效）：8 张新表；</li>
+     *   <li>{@code 时段}（墙上时钟的小时数；{@code 深夜-起时}/{@code 深夜-止时}，走 {@link #nowMs()}）—— 只用于「疲惫」；</li>
+     *   <li>基板 {@code favor}（{@code Host.favor() → FavorView.of(qq)}，与敬重档同一个读数）—— 只用于「戒备」；</li>
+     *   <li>既有档位（{@code m.state} 的当前值）—— 由 {@link #rank} 的裁决使用；</li>
+     *   <li>本轮已有的正文信号（{@code sig.praise}）与既有账本（{@code fpSeen} = 同一个要求又来了、
+     *       {@code m.selfSends} = 她自己连说了几条）。</li>
+     * </ul>
+     * <p><b>刻意没用的两个东西</b>：① <b>没有随机</b>（同输入两次必然同结果，A21 靠它）；
+     * ② <b>没有在 provider 里算</b> —— 这一层只在 {@code on_message}/{@code on_timer} 里有真实时钟，
+     * provider 走的是 {@code peek(now=0)}（只读、不取时钟）⇒ "同一状态两次 build 逐字节一致"永远成立。</p>
+     *
+     * <h3>判序 = 优先级梯子的一部分</h3>
+     * <p>从高到低逐态判（戒备 → 委屈 → 吃醋 → 心虚 → 期待 → 得意 → 害羞 → 疲惫），
+     * <b>第一个命中的就是候选</b>；它能不能真的赢，由 {@link #decide} 拿 {@link #rank} 与
+     * 现场的高优先级态比出来（"一格"）。委屈与吃醋同档（GM 写的 {@code ≈}）⇒ 这里<b>委屈先判</b>。</p>
+     *
+     * @param respOn 这一轮是不是敬重档（对该人 favor ≥ 阈值）—— 是 ⇒ 轻态一个都不进（敬重 &gt; 全部轻态）
+     */
+    static Lite lite(EmotionCfg c, Host h, Mood m, String text, long now, long qq,
+                     EmotionCfg.Sig sig, boolean fpSeen, boolean respOn) {
+        Lite r = new Lite();
+        try {
+            if (c == null || m == null) return r;
+            if (!c.flag(K_LITE_ON, true)) { r.why = "开关:false"; return r; }
+            if (respOn) { r.why = "敬重档（轻态让位）"; return r; }
+            if (Str.blank(text)) return r;
+            // ---- ① 戒备：低好感 + 要隐私/敏感话题/陌生人试探（词表命中 **且** 基板 favor 低于门槛）
+            if (c.hasWord(text, "戒备")) {
+                double fav = favorNum(h, qq);
+                int need = c.i(K_LITE_SHY_FAVOR, DEF_LITE_FAVOR);
+                if (Double.isNaN(fav)) {
+                    r.why = "戒备:读不到好感（fail-closed）";
+                } else if (fav < (double) need) {
+                    r.code = S_CAREFUL;
+                    r.why = "词:戒备 favor=" + favorStr(fav) + "<" + need;
+                    return r;
+                } else {
+                    r.why = "戒备:好感 " + favorStr(fav) + ">=" + need;
+                }
+            }
+            // ---- ② 委屈：被误解 / 被凶 / 被冤枉（词表）
+            if (c.hasWord(text, "委屈")) { r.code = S_WRONGED; r.why = "词:委屈"; return r; }
+            // ---- ③ 吃醋：当着她的面夸别人（词表；或"本轮有夸 + 同句有第三方指称"这一对既有信号）
+            if (c.hasWord(text, "吃醋")) { r.code = S_JEALOUS; r.why = "词:吃醋"; return r; }
+            if (sig != null && sig.praise && c.hasWord(text, "第三方指称")) {
+                r.code = S_JEALOUS;
+                r.why = "夸+第三方指称";
+                return r;
+            }
+            // ---- ④ 心虚：她答错了、被指出错（词表）
+            if (c.hasWord(text, "心虚")) { r.code = S_GUILTY; r.why = "词:心虚"; return r; }
+            // ---- ⑤ 期待：他提到约好的事/时间快到了（词表；"快到了"无法从库里判，见报告）
+            if (c.hasWord(text, "期待")) { r.code = S_EXPECT; r.why = "词:期待"; return r; }
+            // ---- ⑥ 得意：被夸/被捧/办成事（词表）
+            if (c.hasWord(text, "得意")) { r.code = S_PROUD; r.why = "词:得意"; return r; }
+            // ---- ⑦ 害羞：被直球夸 / 被调情（词表；红线仍在，见 prompt.md 的 边界-shy）
+            if (c.hasWord(text, "害羞")) { r.code = S_SHY; r.why = "词:害羞"; return r; }
+            // ---- ⑧ 疲惫：深夜 **且**（她自己也喊累 / 被连着盘 / 长聊）
+            if (night(c, now)) {
+                if (c.hasWord(text, "疲惫")) { r.code = S_TIRED; r.why = "深夜+词:疲惫"; return r; }
+                if (fpSeen) { r.code = S_TIRED; r.why = "深夜+被连着盘"; return r; }
+                int chat = c.i(K_TIRED_CHAT, DEF_TIRED_CHAT);
+                if (chat > 0 && m.selfSends >= chat) {
+                    r.code = S_TIRED;
+                    r.why = "深夜+长聊 " + m.selfSends + ">=" + chat;
+                    return r;
+                }
+            }
+        } catch (Throwable t) {
+            r.code = "";
+            r.why = "异常";
+        }
+        return r;
+    }
+
+    /**
+     * 现在是不是「深夜」（{@code 深夜-起时} 含 / {@code 深夜-止时} 不含）。
+     * <p>{@code 起 <= 止} = 不跨零点（例：{@code 1}/{@code 5} ⇒ 01:00–04:59）；
+     * {@code 起 > 止} = 跨零点（出厂 {@code 23}/{@code 6} ⇒ 23:00–05:59）；
+     * {@code 起 == 止} 或 {@code now <= 0} ⇒ 这一条判据<b>关掉</b>（fail-closed，不会"整天都算深夜"）。</p>
+     * <p>它只在 {@code on_message}/{@code on_timer}（有真实时钟）里被读；provider 从不读时钟。
+     * 批 15：{@code on_message} 那条路上传进来的 {@code now} 就是 {@link #nowMs()}
+     * （可注入，默认 = 真实墙上时钟）。</p>
+     */
+    static boolean night(EmotionCfg c, long now) {
+        if (now <= 0L) return false;
+        int from = c == null ? DEF_NIGHT_FROM : c.i(K_NIGHT_FROM, DEF_NIGHT_FROM);
+        int to = c == null ? DEF_NIGHT_TO : c.i(K_NIGHT_TO, DEF_NIGHT_TO);
+        if (from == to) return false;
+        int h = hourOf(now);
+        if (h < 0) return false;
+        if (from < to) return h >= from && h < to;
+        return h >= from || h < to;
+    }
+
+    /** 墙上时钟的小时（0–23）；拿不到 = -1。 */
+    static int hourOf(long now) {
+        try {
+            Calendar cal = Calendar.getInstance();
+            cal.setTimeInMillis(now);
+            return cal.get(Calendar.HOUR_OF_DAY);
+        } catch (Throwable t) {
+            return -1;
+        }
+    }
+
+    /**
+     * 基板好感度读数（{@code FavorView.of(qq)}；读不到 = {@code NaN}）。
+     * <p>与敬重档<b>同一个来源</b>：本插件不自己算一个数，也不读「亲疏」（那是另一台机器）。</p>
+     */
+    static double favorNum(Host h, long qq) {
+        try {
+            if (h == null || qq <= 0L) return Double.NaN;
+            FavorView f = h.favor();
+            return f == null ? Double.NaN : f.of(qq);
+        } catch (Throwable t) {
+            return Double.NaN;
+        }
+    }
+
+    /**
+     * 轻态的口径回执（一行 dim，{@code logConsole} 含 {@code skill} 才看得见）。
+     * <p>用途与 {@code cue=} / {@code respect=} 同一条：<b>把"这一轮没进轻态"与"进了她没听"分开</b>，
+     * 并把冲突裁决摊开（{@code win=0} + {@code from>to} 就是"轻态被更高优先级压住了"的原始证据）。
+     * <b>只进日志、绝不进情绪块</b>。</p>
+     */
+    private static void traceLite(Host h, String scopeId, Lite lt, String from, String to) {
+        try {
+            if (h == null || lt == null || !Str.has(lt.code)) return;
+            Out o = h.out();
+            if (o == null) return;
+            o.dim("[情绪] lite=" + lt.code
+                    + " rank=" + rank(lt.code)
+                    + " from=" + from + ">" + to
+                    + " win=" + (lt.code.equals(to) ? 1 : 0)
+                    + " scene=" + scopeId
+                    + " why=" + lt.why);
+        } catch (Throwable ignored) {
+        }
+    }
+
     // ================================================================ ② 评估与抢占
 
     /**
@@ -798,9 +1130,13 @@ public final class EmotionMood {
      *
      * @param fp 这一次入站消息的<b>请求指纹</b>（{@link #fpOf}；null = 拿不到）。
      *           「重复问」的计数与判据都按它分开（见 {@link #repKey}），不再共用一个键。
+     * @param L  v3 轻态候选（{@link #lite} 的产物；{@code null} 或 {@code code} 为空 = 这一轮没有轻态候选）。
+     *           它在<b>即刻通道（骂/求饶）之后</b>、常规负向通道与正向通道<b>内部</b>参与裁决，
+     *           裁决判据只有一个：{@link #rank}（同一轮只有一个状态赢 —— "一格"）。
      */
     private static void decide(Mood m, EmotionCfg c, Result r, long now, long qq,
-                               boolean[] valid, boolean praiseOk, String fp, boolean fpSeen, EmotionCfg.Sig sig) {
+                               boolean[] valid, boolean praiseOk, String fp, boolean fpSeen,
+                               EmotionCfg.Sig sig, Lite L) {
         String from = m.state;
         r.from = from;
         r.to = from;
@@ -808,6 +1144,9 @@ public final class EmotionMood {
         int cur = levelOf(from);
         boolean neg = S_ANGRY.equals(from) || S_SAD.equals(from) || S_LETDOWN.equals(from);
         int peaceNeed = c.i("缓和分", 3);
+        // ---- v3 轻态候选的现场视图（空串 = 没有候选；下面三处裁决都用它）
+        String liteCode = L == null ? "" : L.code;
+        String liteWhy = L == null ? "" : L.why;
         // ---- ★★ 情绪 v2 §1：罢工态（strike）的维持与退出，以及 angry → strike 的升级 ★★
         // 位置**刻意在"即刻通道"之前**：那条通道会把"另一个人骂过来"写成 move(S_ANGRY, …)，
         // 既把罢工降回生气、又会把 trigger_by 换成别人 —— 而 §1.2 要求罢工**锁人**。
@@ -893,6 +1232,12 @@ public final class EmotionMood {
             int n = m.count(CODES[gp]);
             int th = nOf(c, gp) + 1;
             if (praiseOk || gp == G_INTEREST) {
+                // ---- ★ v3 轻态裁决（正向这一路）：轻态比 happy 高、也比当前态高 ⇒ 走轻态。
+                //   （得意/害羞/期待/疲惫 都比 happy 高；戒备/委屈/心虚/吃醋 也比它高 ⇒ 这一句自然覆盖。）
+                if (Str.has(liteCode) && rank(liteCode) > rank(S_HAPPY) && rank(liteCode) > rank(from)) {
+                    move(m, r, now, qq, liteCode, liteCode, 0, 0, "轻态：" + liteWhy);
+                    return;
+                }
                 if (S_CALM.equals(from) || S_HAPPY.equals(from)) {
                     move(m, r, now, qq, S_HAPPY, CODES[gp], n, th,
                             gp == G_PRAISE ? "被夸" : "持续感兴趣话题");
@@ -920,6 +1265,24 @@ public final class EmotionMood {
             }
         }
         if (gi < 0) {
+            // ---- ★ v3 轻态裁决（没有常规负向通道命中这一路）：这才轮到轻态说话。
+            //   两条口径：已经在轻态里 ⇒ 同态续期（不重复打转移行，与那 6 档同一个口径）；
+            //   不在（或在一个更低的档） ⇒ 只有 rank 更高才改判 —— 于是"疲惫+开心"里开心让位、
+            //   "失落 vs 疲惫"里失落不被降级（GM 的梯子：失落 > 疲惫）。
+            if (Str.has(liteCode)) {
+                if (liteCode.equals(from)) {
+                    m.by = qq;
+                    r.renewed = true;
+                    r.n = 0;
+                    r.th = 0;
+                    r.reason = "轻态续期：" + liteWhy;
+                    return;
+                }
+                if (rank(liteCode) > rank(from)) {
+                    move(m, r, now, qq, liteCode, liteCode, 0, 0, "轻态：" + liteWhy);
+                    return;
+                }
+            }
             if (!r.changed) {
                 r.n = 0;
                 r.th = 0;
@@ -933,6 +1296,17 @@ public final class EmotionMood {
         String reason = reasonOf(gi);
         int th = thOf(m, c, gi);
         int n = nOf(c, gi) + 1;
+        // ---- ★ v3 轻态裁决（常规负向这一路）：轻态比这一路的 `to` 高、**也比当前态高** ⇒ 改判轻态。
+        //   这一句就是"同一轮只能进一个状态"的落点：两边比的是同一个 {@link #rank}，谁也不叠加。
+        //   被改判时这一路的计数照旧消耗（与它自己命中时的口径一致），免得旧计数在账上再顶回来。
+        //   走不到这一句的常见侧：`from` 已经是 strike/angry/sad（ranker 更高，轻态赢不了）。
+        if (Str.has(liteCode) && rank(liteCode) > rank(from)
+                && (to == null || rank(liteCode) > rank(to))) {
+            if (gi == G_POKE) m.pokeGrp = 0;
+            clearHit(m, gi, fp);
+            move(m, r, now, qq, liteCode, liteCode, 0, 0, "轻态：" + liteWhy);
+            return;
+        }
         if (to == null) {
             // P4 不降级：已在更高强度时低强度触发只计数不改写
             clearHit(m, gi, fp);
@@ -958,7 +1332,7 @@ public final class EmotionMood {
             r.reason = reason;
             return;
         }
-        if (!dwellOk(from, levelOf(to), now, c, m)) {
+        if (!dwellOk(from, rank(to), now, c, m)) {
             // 停留下限（只约束常规通道的反向触发）：只计数、不改写
             clearHit(m, gi, fp);
             r.n = n;
@@ -1051,12 +1425,17 @@ public final class EmotionMood {
      *   <li>基准取<b>上一条消息</b>的间隔（不是"上次状态变化"）：后者会被不断续期的
      *       {@code since} 永久钉死（V3 被这件事咬过），而且"60 秒没说话再被惹"本来就该照常生效。</li>
      * </ol>
+     *
+     * <p><b>v3（14 态）只改了一处</b>：强弱比较从 {@code levelOf} 换成 {@link #rank}（那条
+     * "谁压谁"的梯子）。对既有 6 态<b>完全等价</b> —— 两条函数在 6 态上的次序一模一样
+     * （strike &gt; angry &gt; sad &gt; letdown &gt; happy = calm），而这里只做次序比较
+     * （{@code >=}）；对新加的 8 个轻态则得到与 GM 梯子一致的方向（例：心虚(8) 不会被 失落(7) 降级）。</p>
      */
     private static boolean dwellOk(String from, int toLevel, long now, EmotionCfg c, Mood m) {
         long floor = c.i("停留下限秒", 60) * 1000L;
         if (floor <= 0L) return true;
         if (S_CALM.equals(from)) return true;               // 平淡不是强度：第一次被惹毛立刻生效
-        if (toLevel >= levelOf(from)) return true;          // 向上 / 同强度：立刻生效
+        if (toLevel >= rank(from)) return true;             // 向上 / 同强度：立刻生效
         return m.lastSep >= floor;
     }
 
@@ -1232,7 +1611,7 @@ public final class EmotionMood {
         String sub = Str.lower(J.s(payload, "_notice_sub_type", ev.subType()));
         if (!isPoke(c, sub, J.s(rec, "content", ""))) return r;
         String scopeId = scopeOf(gid, qq);
-        long now = System.currentTimeMillis();
+        long now = nowMs();                     // ★ 批 15：同一个接缝（默认 = 真实墙上时钟）
         long slot = slotOf(now, c);
         synchronized (lockOf(scopeId)) {
             Mood m = load(s, scopeId);
@@ -1256,7 +1635,9 @@ public final class EmotionMood {
             //   所以非罢工路径的行为逐字节不变。
             boolean[] pokeValid = new boolean[G_N];
             pokeValid[G_POKE] = true;
-            decide(m, c, r, now, qq, pokeValid, false, null, false, c.sig(null));
+            // ★ v3：戳这一路**没有正文** ⇒ 一个轻态都不可能命中（lite() 对空正文直接返回空），
+            //   所以最后一个参数传 null —— 这一路的判据与结果与改前逐字节一致。
+            decide(m, c, r, now, qq, pokeValid, false, null, false, c.sig(null), null);
             r.st = m;
             if (r.changed) log(c, h, r.line(scopeId));
             r.wrote = save(s, scopeId, m);
@@ -1579,7 +1960,7 @@ public final class EmotionMood {
         synchronized (lockOf(scopeId)) {
             Mood m = load(s, scopeId);
             m.selfTag = Str.trim(tag);
-            m.selfTagTs = now <= 0L ? System.currentTimeMillis() : now;
+            m.selfTagTs = now <= 0L ? nowMs() : now;               // ★ 批 15：同一个接缝
             m.selfTagScored = false;
             save(s, scopeId, m);
         }
@@ -1594,14 +1975,31 @@ public final class EmotionMood {
         return false;
     }
 
-    /** 从回复正文里读自报标记（{@code [[mood:X]]}）；没有就是空串。 */
+    /**
+     * 从回复正文里读自报标记（{@code [[mood:X]]}）；没有、或不在允许清单里就是空串。
+     *
+     * <p><b>★★ 2026-09-22「归一与可观测批」（W2）：识别只有一处（基板）★★</b>
+     * 这里原来自己写了一份<b>更窄</b>的识别（{@code reply.indexOf("[[mood:")} —— 只认
+     * <b>小写 {@code mood}、恰好两个半角中括号、冒号紧跟</b>）⇒ 她换个写法自报
+     * "做不到 / 为难 / 违规"就<b>根本不记分</b>（记分口径 {@code self_tag}）。
+     * 现在那份自带识别<b>整段删除</b>，直接转发基板
+     * {@link sair.v4.qq.MoodMarks#tagOf(String)} —— 与 {@code MoodStage} 的剥离、
+     * {@code term.Sinks.gate} 与 {@code qq.Api} 的内容级闸<b>同一个判据</b>
+     * （"全树只有一处识别"从本批起真的成立）。</p>
+     *
+     * <p><b>这是行为变化（变宽，不是变窄）</b>：{@code [mood:做不到]}（一个中括号）、
+     * {@code [[MOOD:做不到]]}（大写）、{@code [[mood: 做不到 ]]}（冒号后带空格）
+     * 现在<b>也会记分</b>；基板<b>刻意不认</b>全角方括号 {@code ［［mood:x］］}
+     * 与夹了零宽字符的写法（见 {@code MoodMarks} 类注释："扩大识别面 = 把今天照发的东西
+     * 改成丢掉，那是行为回归"）。{@code 转述} 的识别结果与改前**逐字相同**（它本来就在
+     * {@code prompt.md} 的 {@code 自报-键} 里），而记分那一侧本来就不为它加分
+     * （{@code onMessage} 只把 做不到/为难/违规 映射成 cant/hard/violate）；
+     * "本轮一个字都不 @" 那半件事仍归 {@code MoodStage}。</p>
+     */
     public static String tagOf(EmotionCfg c, String reply) {
         if (Str.blank(reply)) return "";
-        int i = reply.indexOf("[[mood:");
-        if (i < 0) return "";
-        int j = reply.indexOf(']', i + 7);
-        if (j < 0) j = reply.length();
-        String raw = Str.trim(reply.substring(i + 7, j).replace("]", ""));
+        String raw = sair.v4.qq.MoodMarks.tagOf(reply);   // ★ 识别只有一处（基板 MoodMarks）
+        if (!Str.has(raw)) return "";
         List<String> allow = c == null ? null : c.tags("自报-键");
         if (allow == null || allow.isEmpty()) allow = EmotionCfg.split("做不到,为难,违规");
         for (String a : allow) if (a.equals(raw)) return raw;
@@ -1696,6 +2094,185 @@ public final class EmotionMood {
         }
     }
 
+    // ================================================================ ⑦b 敬重档（基板好感度分档）
+
+    /**
+     * 「敬重档」的一次判定结果（<b>只读</b>：读的是<b>基板好感度</b>，本插件一个字都不写、
+     * 也不改状态机 —— 状态该生气还生气，改的只是"对她怎么说话"）。
+     *
+     * <p><b>两套数，别混（甲方 2026-09-26 规格里最容易读错的一处）</b>：
+     * {@code 亲疏}（{@link EmotionState} 那一台 0~1000 的机器，档位层在「态度/关系」表里读它）
+     * 是她<b>当下的情绪量</b> —— 随消息涨落、一个 20 分钟网格里就能变；
+     * 基板 {@link FavorView#of(long)} 是<b>对这个人长期的账</b>（事实块的 {@code caller.favor}、
+     * 她用 {@code <favor …/>} 写的那个数）。敬重档<b>只认后者</b>，{@code 亲疏} 一个字段都不读。</p>
+     */
+    public static final class Respect {
+        /** 进档了吗（{@code true} = 这一轮对他按敬重档说话）。 */
+        public boolean on;
+        /** 读到的好感度（<b>读数</b>，不自算；回执 {@link #why} 里的那个数就是它）。 */
+        public double favor;
+        /** 生效阈值（**基板 {@code favorNoAngerMin}**；读不到 = 本技能的 {@code 敬重档-好感度}，见 {@link #respectNeed}）。 */
+        public int need;
+        /** 档位名：基板 {@link FavorView#levelName(double)} 的原话，<b>不是</b>本插件自己算的。 */
+        public String level = "";
+        /** 填好占位符的敬重文案（语气行去掉前缀的那一半，{@code EmotionProvider.trimBlock} 的第 ④ 刀用它）。 */
+        public String body = "";
+        /** 已经拼好的语气行（{@code 【此刻情绪：敬重】…}）；空串 = 没进档。 */
+        public String head = "";
+        /** 口径回执（形如 {@code favor:750>=700}；只进日志，见 {@link EmotionProvider}）。 */
+        public String why = "";
+    }
+
+    /**
+     * <b>敬重档的生效阈值</b>（这条线**唯一的收口处**）：<b>基板 {@code favorNoAngerMin} 优先</b>；
+     * 读不到（老 jar / 类或方法不存在）才退回本技能的 {@code 敬重档-好感度}
+     * （{@link #K_RESPECT_NEED}，出厂 {@link #DEF_RESPECT}）。
+     *
+     * <p><b>★ 批 15 / 2026-09-26（GM 裁定「阈值以基板为准」）</b>：这条线原来有**两个旋钮** ——
+     * 基板 {@code favorNoAngerMin}（出厂 700，唯一真源 {@code sair.v4.auth.FavorGate}）与本技能的
+     * {@code 敬重档-好感度}（出厂 700）。主人把基板那个改成 650，情绪侧仍然按 700 判"敬重档"：
+     * 同一个门槛、两份真相。裁定：**以基板为准**；技能只在读不到基板值时退回自己那个键。</p>
+     *
+     * <p><b>为什么用反射、不直接写 {@code FavorGate.noAngerMin()}</b>：技能源码是在**运行期**由基板
+     * 编译的（{@code sair.v4.hot.SkCompile}）。老 jar 上那个方法不存在 ⇒ 直接调用会让**编译**失败
+     * ⇒ **整层技能不加载** —— 那正是既有硬要求禁止的事（技能不能因为 jar 版本差异整层不加载）。
+     * 反射把"版本差异"关进 try/catch：类不存在 / 方法不存在 / 调不动，一律走回退，**绝不抛出去**。</p>
+     *
+     * <p>读到的值**原样使用**（含 {@code <=0}）：{@code <=0} 仍按 {@link #respect} 里那条既有
+     * fail-safe 走「整档关」——基板把门槛写成 0、和本地键写成 0 是同一件事，不再有两套口径。</p>
+     */
+    public static int respectNeed(EmotionCfg c) {
+        int sub = substrateNoAngerMin();
+        if (sub != NO_SUBSTRATE_NEED) return sub;
+        return c == null ? DEF_RESPECT : c.i(K_RESPECT_NEED, DEF_RESPECT);
+    }
+
+    /** 基板值读不到的哨兵（{@link Integer#MIN_VALUE} = 没有 / 读不动 ⇒ 退回本技能那个键）。 */
+    private static final int NO_SUBSTRATE_NEED = Integer.MIN_VALUE;
+
+    /**
+     * 基板 {@code favorNoAngerMin} 的**防御式**读数（反射；读不到 = {@link #NO_SUBSTRATE_NEED}）。
+     * <p>读的是基板的**生效值**（{@code FavorGate.noAngerMin()} 每次现读它自己那份 {@code Conf}）——
+     * 主人改了配置、重启之后这一侧跟着走；基板没注入 {@code Conf} 时它自己给出口 700（基板的出厂值）。</p>
+     * <p><b>这里必须整段吞 {@code Throwable}</b>：一个读数取不到，绝不能把技能装载/一轮对话搞死。</p>
+     */
+    private static int substrateNoAngerMin() {
+        try {
+            Class<?> fg = Class.forName("sair.v4.auth.FavorGate");
+            Method m = fg.getMethod("noAngerMin");
+            Object v = m.invoke(null);
+            if (v instanceof Number) return ((Number) v).intValue();
+            return NO_SUBSTRATE_NEED;
+        } catch (Throwable t) {
+            return NO_SUBSTRATE_NEED;               // 老 jar / 类或方法不存在：退回本地键（绝不抛）
+        }
+    }
+
+    /**
+     * 判「这个人是不是敬重档」—— 甲方 2026-09-26 规格：{@code favor >= 阈值}
+     * （阈值见 {@link #respectNeed}：基板 {@code favorNoAngerMin} 优先）⇒
+     * <b>不再对此人发怒</b>（压过既有的生气/暴怒/罢工语气）且<b>用敬重、平稳的口气说话</b>。
+     *
+     * <p><b>不进档 ⇒ 与改前逐字节一致</b>，共五种情况（每一条都留了回执）：</p>
+     * <ol>
+     *   <li>{@code 敬重档开关: false}（总开关关掉）；</li>
+     *   <li>生效阈值 {@code <= 0} ⇒ <b>整档关掉</b>（fail-safe：一行写坏的阈值不该让所有人都进
+     *       敬重档）—— 批 15 之后这个阈值默认取自基板 {@code favorNoAngerMin}（见 {@link #respectNeed}），
+     *       本地 {@code 敬重档-好感度} 只在读不到基板值时才用它；</li>
+     *   <li>读数低于阈值；</li>
+     *   <li><b>主人与她本人（SYSTEM）不受影响</b>：主人恒定走原路（旧口径"语气与态度完全不豁免，
+     *       可以怼任何人，包括主人"一个字不改），判据同时看 caller 身份与 {@code masterQQ}；</li>
+     *   <li>拿不到好感面（host 为 null / {@code Host.favor()} 为 null）或读的时候出了任何事
+     *       ⇒ 一律旧路（宁可发怒，也不因为一个读数失败改变语气）。</li>
+     * </ol>
+     *
+     * @param who 本轮的说话人（{@code BuildContext.caller()} / {@code Outbound.caller()}）；可空
+     * @param qq  情绪的对象（通常是同一人；主人判定按它兜一遍）
+     */
+    public static Respect respect(EmotionCfg c, Host h, Caller who, long qq) {
+        Respect r = new Respect();
+        try {
+            if (c == null) {
+                r.why = "无配置";
+                return r;
+            }
+            r.need = respectNeed(c);            // ★ 批 15：基板 favorNoAngerMin 优先（读不到才回退本地键）
+            if (!c.flag(K_RESPECT_ON, true)) {
+                r.why = "开关:false";
+                return r;
+            }
+            if (r.need <= 0) {
+                r.why = "阈值<=0（整档关）";
+                return r;
+            }
+            if (qq <= 0L) {
+                r.why = "无对象";
+                return r;
+            }
+            if (who != null && (who.master() || who.system())) {
+                r.why = "主人/SYSTEM";
+                return r;
+            }
+            if (isMaster(h, qq)) {
+                r.why = "主人";
+                return r;
+            }
+            FavorView f = h == null ? null : h.favor();
+            if (f == null) {
+                r.why = "无好感面";
+                return r;
+            }
+            r.favor = f.of(qq);                        // ★ 读数：基板那一份，本插件不自己算
+            r.level = Str.nz(f.levelName(r.favor));    // ★ 档位名：基板那一份
+            if (r.favor < (double) r.need) {
+                r.why = "favor:" + favorStr(r.favor) + "<" + r.need;
+                return r;
+            }
+            r.on = true;
+            r.why = "favor:" + favorStr(r.favor) + ">=" + r.need;
+            r.body = EmotionCfg.fill(respectLine(c),
+                    "档位", r.level,
+                    "favor", favorStr(r.favor),
+                    "阈值", String.valueOf(r.need),
+                    "谁", "他");
+            r.head = Str.has(r.body) ? ("【此刻情绪：" + respectLabel(c) + "】" + r.body) : "";
+        } catch (Throwable t) {
+            r.on = false;
+            r.head = "";
+            r.why = "异常";
+        }
+        return r;
+    }
+
+    /** 这个 QQ 是不是主人（读不到 masterQQ = 不是）。 */
+    private static boolean isMaster(Host h, long qq) {
+        try {
+            long m = h == null || h.conf() == null ? 0L : h.conf().masterQQ();
+            return m > 0L && qq == m;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** 敬重档的展示标签（{@code 敬重-标签}，读不到用 {@link #DEF_RESPECT_LABEL}）。 */
+    public static String respectLabel(EmotionCfg c) {
+        String v = c == null ? "" : c.s(K_RESPECT_LABEL, "");
+        return Str.has(v) ? v : DEF_RESPECT_LABEL;
+    }
+
+    /** 敬重档的语气文案（{@code 敬重-行} 逐字，读不到用 {@link #DEF_RESPECT_LINE}）。 */
+    public static String respectLine(EmotionCfg c) {
+        String v = c == null ? "" : c.s(K_RESPECT_LINE, "");
+        return Str.has(v) ? v : DEF_RESPECT_LINE;
+    }
+
+    /** 好感度显示：整数值不打小数点（{@code 750} 而不是 {@code 750.0}；回执与占位符共用）。 */
+    static String favorStr(double v) {
+        long r = Math.round(v);
+        if (Math.abs(v - (double) r) < 0.0001D) return String.valueOf(r);
+        return String.valueOf(v);
+    }
+
     // ================================================================ ⑧ 状态 → 文案（全部 prompt.md 驱动）
 
     /** 一个状态的中文名（读不到就退回码本身）。 */
@@ -1704,14 +2281,70 @@ public final class EmotionMood {
         return Str.has(v) ? v : state;
     }
 
-    /** "这一刻"那一行（事实形状，机器可读）：<b>情绪块的第一行</b>。 */
+    /** "这一刻"那一行（事实形状，机器可读）：<b>情绪块的第一行</b>（不带"对方情绪标签"那一格）。 */
     public static String factLine(EmotionCfg c, Mood m) {
+        return factLine(c, m, "");
+    }
+
+    /**
+     * {@link #factLine(EmotionCfg, Mood)} + <b>「对方最近一条消息的情绪标签」那一格</b>
+     * （2026-09-27 批 17 L1：把状态机算出来的东西<b>还给她</b>）。
+     *
+     * <p><b>甲方口径（逐字）</b>：「为什么不把语境语义这些东西交给AI自己分析呢？我们提供这个情绪状态机
+     * 就好了呀。」—— 这个标签每轮都算出来了（{@link EmotionState#peek} 的 {@code lastEmotion}），
+     * 但在批 17 之前它<b>只被 {@link #cue} 的否决②读</b>（当"不许发"的判据），<b>从不给她看</b>。
+     * 本批在事实行里加一格 {@code "them"}，并在<b>同一行</b>再给一格 {@code "themRead"}
+     * （= {@code prompt.md} 的 {@code 标签读法}，教她怎么用这一格）。</p>
+     *
+     * <p><b>为什么两格都只加在首行里</b>：情绪块 ≤7 行是硬约束（首行事实 + 语气 + 范例 + 边界 +
+     * 自报 + 可选时机 + 覆盖句已经满了），所以"提供 + 引导"都只能落在**已经存在的那一行**里 ——
+     * 不加行、不改行序、不动 {@link EmotionProvider#trimBlock} 的降级梯子。</p>
+     *
+     * <p><b>显示口径 = legacy 那一行同一份</b>（{@link #themTag}）：空值不显示、"平静"不显示；
+     * 于是"平静/空值"那一轮的事实行与"加这一格之前"<b>逐字节一致</b>。
+     * {@code themRead} 与 {@code them} 同进同出（没有标签那格时不必解释那一格）。</p>
+     *
+     * <p><b>纪律（措辞已按磁盘校正 —— 非写者 V17 抓到"一个中文字都不新增"按字面不成立）</b>：
+     * <b>面向她的文案 100% 住在 {@code prompt.md}</b> —— 标签来自既有规则层（{@code 情绪-*}/{@code 触发-*}），
+     * 读法文案来自 {@code prompt.md} 的 {@code 标签读法}（读不到就不给那一格，不造第二份文案）。Java 里新增的
+     * <b>不是文案</b>，只有<b>两个配置键名</b>：{@code "标签读法"}（新增）与 {@code "平静标签"}
+     * （从 {@link EmotionProvider#legacy} 搬迁到 {@link #themTag}，同键同义）。</p>
+     *
+     * @param lastEmotion 对方最近一条消息的情绪标签（{@link EmotionProvider#build} 里那一次
+     *                    {@code EmotionState.peek} 的产物；拿不到就给空串）
+     */
+    public static String factLine(EmotionCfg c, Mood m, String lastEmotion) {
         JsonObject o = new JsonObject();
         o.addProperty("state", m == null ? S_CALM : m.state);
         o.addProperty("since", iso(m == null ? 0L : m.since));
         o.addProperty("trigger", triggerText(c, m));
         o.addProperty("level", levelOf(m == null ? S_CALM : m.state));
+        String them = themTag(c, lastEmotion);
+        if (Str.has(them)) {
+            o.addProperty("them", them);
+            String how = c == null ? "" : c.s("标签读法", "");
+            if (Str.has(how)) o.addProperty("themRead", how);   // ★ 引导面：文案住 prompt.md
+        }
         return "mood: " + o.toString();
+    }
+
+    /**
+     * 「对方最近一条消息的情绪标签」<b>要不要显示</b>（V3 口径，与 legacy 那一行**同一处判据**）：
+     * <b>空值不显示、"平静"不显示</b>（{@code 平静标签} 那个值 = "这一条没有情绪"）。
+     * <p><b>与改前的关系（措辞已按磁盘校正 —— 非写者 V17 抓到）</b>：<b>空值 / "平静" ⇒ 空串</b>这一条判据与改前
+     * <b>一致</b>；但本方法比旧写法<b>多做了一次 {@code trim()}</b>（{@code " 难过 "} ⇒ {@code "难过"}）——
+     * <b>实测不可达</b>（{@code lastEmotion} 唯一不 trim 的写入点就是读库那一行），方向是<b>收紧</b>，不是等价。</p>
+     *
+     * <p>抽成一个方法只为一件事：{@link EmotionProvider#legacy} 与 {@link #factLine} 用同一条口径 ——
+     * 免得出现"legacy 行不显示、档位块显示平静"这种两套判据的漂移。</p>
+     *
+     * @return 该显示的那一格的值；不显示时给<b>空串</b>（调用方按"空串 = 这一格不存在"处理）
+     */
+    static String themTag(EmotionCfg c, String lastEmotion) {
+        String last = lastEmotion == null ? "" : lastEmotion.trim();
+        if (!Str.has(last)) return "";
+        String calm = c == null ? EmotionCfg.DEF_CALM : c.s("平静标签", EmotionCfg.DEF_CALM);
+        return last.equals(calm) ? "" : last;
     }
 
     private static String triggerText(EmotionCfg c, Mood m) {
@@ -1777,29 +2410,287 @@ public final class EmotionMood {
             + "若是转述别人骂我（不是他本人骂），加写 [[mood:转述]]（机器据此不加 @）。";
 
     /**
-     * 把一块拼成"情绪块"（情绪 v2 = <b>最多 6 行</b>）：
-     * 第 1 行事实 + 第 2 行语气 + 第 3 行<b>范例</b> + 第 4 行边界 + 第 5 行自报要求 + 末行覆盖句。
+     * 「发表情包的时机提示」那一行的兜底（{@code prompt.md} 的 {@code 时机-行} 读不到时的下限）。
+     * <p>与 {@link #DEF_SELF_ASK} 同一个口径（同源同文：改一处必须改两处），但它与那一行有一处
+     * 关键差别：<b>这一行是可选的</b> —— {@link #cueLine} 判"有一条否决命中"时返回空串，
+     * 一个字都不加；三条否决全过时才把这一行拼进块。</p>
+     * <p>★ <b>批 16 改向 / 2026-09-27 甲方裁定</b>：文案从「这会儿像在逗乐/接梗」改成
+     * "此刻没什么不妥、想发就发一张" —— 旧文案是<b>被删掉的那条正向白名单在说话</b>
+     * （它替她判了"像在逗乐"），与新口径「语境语义交给 AI 自己分析」矛盾。</p>
+     */
+    static final String DEF_CUE =
+            "【时机】这会儿没什么不妥：想发就发一张表情包（sticker，一条最多一张，不用问）。";
+
+    /**
+     * <b>「发表情包的时机提示」那一行</b>（2026-09-24 甲方令「她得自发愿意发表情包、愿意去调这个东西」；
+     * 情绪块的第 7 行，<b>可选</b>：不合适时返回空串）。
+     *
+     * <h3>为什么装在「情绪」里</h3>
+     * <p>这一行要的是"<b>此刻正合适</b>"这个判断，而"此刻"的全部事实（本轮正文、档位状态、对方最近情绪标签）
+     * 只有情绪块这一处每轮都在手边，且它本来就是"每轮注入的那一段"的唯一写者 ⇒ 挂在它后面最省、最不会飘。</p>
+     *
+     * <h3>它只说话，不替她发图</h3>
+     * <p>本方法<b>只产出一行文字</b>：发不发、发哪一张仍是她自己调 {@code sticker} 工具决定的，
+     * 出站纪律（禁词 veto / 只骂触发者 / 标记剥离）一步都没绕过 —— 这一行永远不碰 {@code Outbound}、
+     * 不碰 NapCat、不写任何库。</p>
+     *
+     * <h3>★★ 批 16 改向 / 2026-09-27 甲方裁定（逐字）</h3>
+     * <p>「<b>为什么不把语境语义这些东西交给AI自己分析呢？我们提供这个情绪状态机就好了呀。</b>」
+     * 「<b>我们提供东西给AI用，当然也要引导AI如何用，并且用起来，这才是我们的初衷，
+     * 而不是我们把一些东西写死，让AI按部就班。</b>」</p>
+     * <p>⇒ 本状态机从此<b>只提供"事实与状态"</b>：心情档（{@code mood:<场合>} 的 {@code state}）、
+     * 对方最近一条消息的情绪标签（{@code emotion.last_emotion}）、亲疏、场合，以及下面那三条既有否决。
+     * <b>"此刻合不合适发表情包"改由她（模型）自己判</b> —— 不由本方法替她判；那一行只负责
+     * <b>引导她"这件事可以主动做、怎么做"</b>（文案 = {@code prompt.md} 的 {@code 时机-行}）。</p>
+     *
+     * <h3>判据（本批改向之后只剩否决面）</h3>
+     * <ul>
+     *   <li><b>总开关</b>：{@code 时机提示}（出厂 {@code true}）。关掉 ⇒ <b>不加</b>
+     *     （回执 {@code why=开关:false}）。</li>
+     *   <li><b>正向判据：没有了。</b>本批<b>删掉了旧的三条</b>（README 里那段"像逗乐/接梗"的正向口径
+     *     随之一并作废）—— 旧读数就是下面这三行，现在一行都不剩：
+     *     <ol>
+     *       <li>旧 正向① {@code hasTag(c,"时机-标签",last)} —— 对方标签命中白名单；</li>
+     *       <li>旧 正向② {@code c.flag("时机-开心",true) && S_HAPPY.equals(state)} —— 她自己 happy 档；</li>
+     *       <li>旧 正向③ {@code !group && c.flag("时机-私聊",false)} —— 私聊且无否决。</li>
+     *     </ol></li>
+     *   <li><b>否决 = 一个字都不加</b>（任一命中就退出；这三条是甲方唯一要保的安全面，本批<b>一个字未动</b>）：
+     *     <ol>
+     *       <li>档位 ∈ {angry, strike, sad, letdown}（对方在生气/低落、或她正罢工）+ v3 的四档
+     *         {careful, wronged, guilty, jealous}（戒备/委屈/心虚/吃醋）⇒ 回执 {@code why=state:<档>}；</li>
+     *       <li>对方最近情绪标签命中 {@code 时机-否标签}（内容 = 生气/难过/疲惫）
+     *         ⇒ 回执 {@code why=否标签:<标签>}；</li>
+     *       <li>本轮正文命中既有否决词表 {@code 词-违规}（红线）/ {@code 词-做不到} / {@code 词-为难}
+     *         （求助办不到的事）/ {@code 词-骂} / {@code 词-冷落}
+     *         ⇒ 回执 {@code why=词:<表名>}。</li>
+     *       <li>★ 批 17 L4（2026-09-27 甲方裁定）：这一串里原来还有 {@code 词-正经}（办事/排障/正经话题），已
+     *         <b>降级为软引导</b> —— 机器不再拿一张日常高频词表替她判"这条算不算正经办事"。引导面一个字没丢：
+     *         它住在<b>常驻可见</b>的教学文本 {@code data\skills\表情包\表情包.md} 的工具描述里（「不该用：正经办事、
+     *         排障、求助…」逐字仍在）。{@code prompt.md} 的 {@code 词-正经} 那张词表<b>已整行删除</b>（2026-09-27
+     *         裁定：留一个"改了没反应"的旋钮比没有这个旋钮更贵）。<b>回退 = 两处都要做</b>（少任何一处都完全没
+     *         反应）：① 把 {@code "正经"} 加回本方法那一串；② 把那一行加回 {@code prompt.md}（逐字节同文的原文
+     *         见 {@code tmp\v6-real\batch6\W17-Ldata\dry\data\skills\情绪\prompt.md}）。</li>
+     *     </ol></li>
+     *   <li><b>★ 三条否决全过 ⇒ 默认给出那一行</b>（回执 {@code cue=1 why=默认:无否决}）。
+     *     这就是新口径的落点：机器只报"此刻没有任何已知的不妥"，<b>要不要发由她自己看</b>。
+     *     "没什么不妥"不等于"必须发" —— 她看了不发也完全合规，发图权限本就在 {@code sticker} 那一层。</li>
+     * </ul>
+     * <p>为什么是"默认加"而不是"默认不加"：甲方要的是"把语境语义交给她自己分析"。机器能可靠判的
+     * 只有"明显不该发"那一侧（上面三条否决：她自己正恼/正罢工、对方情绪低落、红线/被冒犯/被冷落），
+     * 而"该发"那一侧（接梗、缓和气氛、收尾、文字说不清情绪…）本就是语境语义，判不了也不该判；
+     * 旧口径拿一张白名单替她判，正是本次被裁掉的东西。</p>
+     *
+     * <h3>回退手法（GM 要的"回退即红"；只改临时副本，工程文件不留痕）</h3>
+     * <ul>
+     *   <li><b>放宽否决②</b>：把 {@code prompt.md} 的 {@code 时机-否标签} 清空 ⇒ "对方难过/生气"那几格
+     *     当场变"加"（实测回执 {@code cue=0 why=否标签:难过} → {@code cue=1 why=默认:无否决}）；
+     *     把词放回去即复绿。证据：{@code tmp\v6-real\batch6\W16c\revert2-notag\}。</li>
+     *   <li><b>回退即红（否决③；批 17 L4 之后方向相反）</b>：把 {@code "正经"} <b>加回</b>本方法那一串
+     *     <b>并放回首位</b>（原顺序 {@code { "正经", "违规", "做不到", "为难", "骂", "冷落" }}；追加到末尾只在
+     *     "单表命中"时行为等价，同句同时命中两张表时<b>回执表名会不同</b>）⇒ "正经办事/排障"那一格当场由"加"
+     *     变"不加"（回执 {@code cue=1 why=默认:无否决} → {@code cue=0 why=词:正经}）；撤掉即复绿。
+     *     ★ <b>两处都要做</b>：只加回这一串不红（表已删、标签匹配不到任何词），只加回 prompt.md 那行也不红
+     *     （没有读者）—— 单路只靠<b>结构钉</b>报警（剥注释后 {@code 正经} 0→1；总键 241→242、标量 187→188）。
+     *     证据：{@code tmp\v6-real\batch6\V18b\REPORT.md} §7（rb1/rb2/rb12 三跑）。
+     *     ★ 批 16 之前那版方向（把它拿掉）已被 2026-09-27 裁定取代；旧的实演证据仍在
+     *     {@code tmp\v6-real\batch6\W16c\revert2-noword\}（历史口径，勿再当现状读）。</li>
+     *   <li><b>放宽否决①</b>：拿掉 {@code S_SAD}（临时副本）⇒ <b>本夹具 6 格一格不变</b>：
+     *     那 6 格没有一格的 {@code state} 落进那一串（回执里出现的是 {@code 否标签:*} / {@code 词:*}，
+     *     从来不是 {@code state:*}）⇒ <b>这条路径在这份夹具上验不到</b>（W16-C2 报告里如实记了这一条）。</li>
+     *   <li><b>整体关掉</b>：{@code 时机提示: false} ⇒ 一行都不加（回执 {@code why=开关:false}）。</li>
+     * </ul>
+     *
+     * <h3>与本类之外的两处关系（如实；不改它们，只在报告里点名）</h3>
+     * <ul>
+     *   <li><b>批 16 上一版那三个键已删除</b>（{@code prompt.md} 的 {@code 时机-标签} /
+     *     {@code 时机-开心} / {@code 时机-私聊}；2026-09-27 甲方裁定：「留一个'改了没反应'的旋钮
+     *     比没有这个旋钮更贵」）⇒ 本方法现在**一个字都不读它们**，文件里也**已经没有它们**
+     *     （总键 244→241、标量唯一键 190→187）。批 16 上一版那套"补词/挪标签"
+     *     （把 {@code 调侃} 从否标签挪进标签、并新增道别标签）**按本次裁定作废**：
+     *     白名单已不存在，挪词没有任何效果。<b>要回退旧口径 = 加回三条判据 + 加回三个键</b>，
+     *     只加键不加判据 = 一个改了没反应的旋钮。</li>
+     *   <li>{@code probe\ProbeEmotion.java} §13/§5z 里还有按名读那三个键的旧钉子（测试线 T16 负责
+     *     重锚）。{@code EmotionProvider.cueOf} 的 javadoc 里原来还留着"正向判据①不成立"这类话
+     *     （正向判据已删）—— **批 17 L1 同批修掉了那处注释漂移**，现在它写的是"库读不出来 ⇒
+     *     只影响否决②那一条"。</li>
+     *   <li>{@code 情绪-道别} 那一行<b>保留</b>（它对时机已经<b>没有判据作用</b>）：
+     *     它产出的是一个<b>状态标签</b>（"对方在收尾/道别"是给她的状态事实，属"我们提供状态"），
+     *     删它还会连带改掉「规则表 情绪=10→9」与「无标签也算交流」那条既有计分路径
+     *     （它为什么落在情绪-族而不是 {@code 正则-道别}，实测理由写在 {@code prompt.md} 里）。</li>
+     * </ul>
+     *
+     * @param group 本轮是不是群聊 —— <b>本口径下这个参数已经不再参与任何分流</b>（旧正向③读它，已删）；
+     *     留着只为不改 {@link EmotionProvider} 那边的调用签名。
+     * @param text  本轮正文（{@code BuildContext.text()}；否决③读它）
+     * @param lastEmotion 对方最近一条消息的情绪标签（{@code EmotionState.peek} 的产物；否决②读它）
+     * @return 该加的那一行（{@code 时机-行} 读不到就用 {@link #DEF_CUE}）；
+     *     任一否决命中（或 {@code 时机提示: false}）时返回<b>空串</b>
+     */
+    public static String cueLine(EmotionCfg c, Mood m, boolean group, String text, String lastEmotion) {
+        return cue(c, m, group, text, lastEmotion, null);
+    }
+
+    /**
+     * {@link #cueLine} 的"带口径回执"那一支（{@code why != null} 时把<b>为什么加/为什么不加</b>
+     * 写进它，形如 {@code cue=1 why=默认:无否决} / {@code cue=0 why=否标签:难过}）。
+     *
+     * <p>存在的唯一理由（GM 2026-09-24 验收令）：<b>必须能把"这一行没注入"与"注入了她没听"分开</b>。
+     * 回执只走<b>日志</b>（{@link EmotionProvider} 里那一行 dim）—— <b>绝不进情绪块</b>：
+     * 块里凡是随轮变化的东西都会破坏"同一状态两次 build 逐字节一致"（前缀缓存与探针都靠它）。</p>
+     *
+     * <p>批 16 改向（2026-09-27 甲方裁定）之后，可能出现的回执只有这几种：
+     * {@code 开关:false}（总开关关）、{@code state:<档>}（否决①）、{@code 否标签:<标签>}（否决②）、
+     * {@code 词:<表名>}（否决③）、{@code 默认:无否决}（三条全过 ⇒ 给那一行，
+     * 旧口径里的 {@code 标签:*} / {@code state:happy} / {@code 私聊} 三种已随正向判据一起删掉）。</p>
+     */
+    public static String cue(EmotionCfg c, Mood m, boolean group, String text, String lastEmotion, StringBuilder why) {
+        boolean on = c != null && c.flag("时机提示", true);
+        String state = m == null ? S_CALM : m.state;
+        String last = lastEmotion == null ? "" : lastEmotion.trim();
+        if (!on) return miss(why, "开关:false");
+        // ---- 否决 ①：她/这个场合正恼着、正失落、正在罢工 ⇒ 此刻显然不该发
+        //   ★ v3 补的四档（戒备/委屈/心虚/吃醋）：它们同样是"此刻显然不该发"。
+        //     期待/得意/害羞/疲惫**不在**这一串里（前三个是好时机，疲惫只是话少，不该顺带把梗图关掉）。
+        //   ★ 批 16 改向（2026-09-27 甲方裁定）：这一串**一个字未动** —— 它是甲方要保的安全面。
+        if (S_ANGRY.equals(state) || S_STRIKE.equals(state) || S_SAD.equals(state) || S_LETDOWN.equals(state)
+                || S_CAREFUL.equals(state) || S_WRONGED.equals(state)
+                || S_GUILTY.equals(state) || S_JEALOUS.equals(state)) {
+            return miss(why, "state:" + state);
+        }
+        // ---- 否决 ②：对方最近一条消息的情绪标签是"生气/难过/疲惫"（既有规则层的产物）
+        //   清单内容住在 `prompt.md` 的 `时机-否标签`，**这里一个中文词都不硬编码**（本技能既有纪律）。
+        //   ★ 批 16 改向：本方法**不再读正向白名单 `时机-标签`**（那条判据删了）⇒ 批 16 上一版
+        //     "把 `调侃` 从否标签挪进标签"那类改法**从此没有任何效果**；要放宽这一条只有一条路：
+        //     改 `prompt.md` 里这张清单（清空它 ⇒ "难过/生气"那两格当场变"加"）。
+        if (hasTag(c, "时机-否标签", last)) return miss(why, "否标签:" + last);
+        // ---- 否决 ③：红线 / 求助办不到的事 / 被骂 / 被冷落（既有词表；批 17 L4 起"正经"已降级）
+        //   ★ 批 17 L4（2026-09-27 裁定）：这一串里原来还有 "正经"（办事/排障/正经话题）—— 已降级为软引导：
+        //     机器不再用词表替她判"这条算不算正经办事"；引导面在常驻可见的 data\skills\表情包\表情包.md 的
+        //     工具描述里（「不该用：正经办事、排障、求助…」逐字仍在）。prompt.md 的 `词-正经` 那张表**已整行删除**
+        //     （同一裁定：留一个"改了没反应"的旋钮比没有这个旋钮更贵）。**回退 = 两处都要做**（少任何一处都完全
+        //     没反应）：① 把 "正经" 加回这一串**并放回首位**（原顺序 `{ "正经", "违规", … }`——追加到末尾只在
+        //     "单表命中"时等价，同句命中两张表时回执表名会不同）；② 把那一行加回 prompt.md（逐字节同文原文见
+        //     tmp\v6-real\batch6\W17-Ldata\dry\data\skills\情绪\prompt.md）。其余五个词一个字未动。
+        for (String tag : new String[] { "违规", "做不到", "为难", "骂", "冷落" }) {
+            if (c.hasWord(text, tag)) return miss(why, "词:" + tag);
+        }
+        // ---- ★★ 三条否决全过 ⇒ **默认给出那一行**（批 16 改向 / 2026-09-27 甲方裁定）
+        //   被删掉的三条正向判据见本方法 javadoc；"此刻合不合适发表情包"**交给她自己判** ——
+        //   机器只报"没有任何已知的不妥"，那一行的文案只负责引导她"这件事可以主动做、怎么做"。
+        return hit(c, why, "默认:无否决");
+    }
+
+    /** 不加（回执 {@code cue=0 why=<口径>}）。 */
+    private static String miss(StringBuilder why, String reason) {
+        if (why != null) {
+            why.setLength(0);
+            why.append("cue=0 why=").append(reason);
+        }
+        return "";
+    }
+
+    /** 加（回执 {@code cue=1 why=<口径>}）；文案取自 {@code 时机-行}，读不到就用 {@link #DEF_CUE}。 */
+    private static String hit(EmotionCfg c, StringBuilder why, String reason) {
+        if (why != null) {
+            why.setLength(0);
+            why.append("cue=1 why=").append(reason);
+        }
+        String v = c == null ? "" : c.s("时机-行", "");
+        return Str.has(v) ? v : DEF_CUE;
+    }
+
+    /** 一个标签（逗号分隔的清单键）里有没有 {@code v}（逐字相等，忽略大小写与首尾空白）。 */
+    private static boolean hasTag(EmotionCfg c, String key, String v) {
+        if (c == null || Str.blank(v)) return false;
+        for (String t : c.tags(key)) {
+            if (v.equalsIgnoreCase(t)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * 把一块拼成"情绪块"（情绪 v2 = <b>最多 6 行</b>；2026-09-24 起最多 <b>7 行</b>）：
+     * 第 1 行事实 + 第 2 行语气 + 第 3 行<b>范例</b> + 第 4 行边界 + 第 5 行自报要求
+     * 〔+ 可选第 6 行：<b>时机提示</b>（发表情包，见 {@link #cueLine}）〕+ <b>末行</b>覆盖句。
      *
      * <p>语气行 / <b>范例行</b> / 边界行 / 自报要求行都是"取到内容才加"（可选组口径）
      * ⇒ 行数在 3~6 之间浮动。范例行<b>只在 {@code 范例-<码>} 有值时注入</b>，
      * 位置钉在<b>语气行之后、边界行之前</b>（情绪 v2 §2 的"新增注入行"）。</p>
      *
+     * <p><b>时机提示那一行钉在覆盖句之前</b>（不是"整段的最末尾"）：末行 {@code 【本轮语气以本段为准】}
+     * 是逐字锚点（探针按字面断言，模型靠它认权威），所以可选行只能插在它前面 —— 这是这一批唯一
+     * 需要解释的位置决定。没有这一行时（{@code cue} 为空）整个方法与改动前<b>逐字节一致</b>。</p>
+     *
+     * @param cue 可选第 6 行（{@link #cueLine} 的产物；空串 = 这一行不出现）
      * @return 非空则一定满足「首行 {@code mood: }」「末行覆盖句」这两条逐字锚点
      */
-    public static String block(EmotionCfg c, Mood m) {
-        String state = m == null ? S_CALM : m.state;
-        List<String> lines = new ArrayList<String>();
-        lines.add(factLine(c, m));
+    public static String block(EmotionCfg c, Mood m, String cue) {
+        return block(c, m, cue, null);
+    }
+
+    /**
+     * 语气行（{@code 【此刻情绪：<标签>】<语气文案>}）：语气文案取不到 ⇒ <b>空串</b>（这一整行不加）。
+     * <p>抽出来只为一件事：让 {@link #block} 与 {@code EmotionProvider.trimBlock} 的降级梯子用
+     * <b>同一个</b>形状 —— 梯子里那一步原来是自己拼的，现在两边只有这一个来源。</p>
+     */
+    public static String moodHead(EmotionCfg c, String state) {
         String tone = toneLine(c, state);
-        if (Str.has(tone)) lines.add("【此刻情绪：" + label(c, state) + "】" + tone);
-        String eg = exampleLine(c, state);
+        return Str.has(tone) ? ("【此刻情绪：" + label(c, state) + "】" + tone) : "";
+    }
+
+    /**
+     * {@link #block(EmotionCfg, Mood, String)} 的<b>敬重档</b>那一支（2026-09-26 甲方规格）。
+     *
+     * <p>{@code r} 为空 / 没进档 / 文案取不到 ⇒ <b>与 {@code block(c,m,cue)} 逐字节一致</b>
+     * （这是"favor < 阈值走旧路"的实现保证：分歧只有下面那三处 {@code resp} 分支）。</p>
+     *
+     * <p>进档时改三处、<b>只改语气面</b>：① 语气行换成敬重档（{@code 【此刻情绪：敬重】…}）；
+     * ② 范例行、③ 边界行按 {@code calm} 档取 —— 于是生气/暴怒/罢工那三档的
+     * <b>语气、范例、边界一个字都进不了这一轮</b>（"不发怒"的落点就是这三行）。</p>
+     *
+     * <p><b>首行事实行不动</b>（{@code mood:{"state":"angry",…}} 照写）：它是<b>机器可读的事实</b>
+     * （her 的状态机确实被骂到生气了），而且首行与末行是<b>逐字锚点</b>（探针按字面断言）。
+     * "不发怒"落在语气面上，靠的是覆盖句那条"语气以本段为准"与敬重档那一行的逐字要求 ——
+     * 这也正是 {@code identity.md} 的 [风格] 那条"生气/罢工态一律以本轮【此刻情绪】那一段为准"的用法。</p>
+     */
+    public static String block(EmotionCfg c, Mood m, String cue, Respect r) {
+        return block(c, m, cue, r, "");
+    }
+
+    /**
+     * {@link #block(EmotionCfg, Mood, String, Respect)} 的<b>带"对方情绪标签"那一支</b>
+     * （2026-09-27 批 17 L1）：唯一的分歧就一处 —— 首行事实行交给
+     * {@link #factLine(EmotionCfg, Mood, String)}，于是她能在块里看到 {@code them}（+ 读法）。
+     *
+     * <p>空串（默认这一支）⇒ 与改动前<b>逐字节一致</b>；行数、行序、降级梯子一个字都没动。</p>
+     *
+     * @param lastEmotion 对方最近一条消息的情绪标签（{@link EmotionProvider} 那一次 peek 的产物）
+     */
+    public static String block(EmotionCfg c, Mood m, String cue, Respect r, String lastEmotion) {
+        boolean resp = r != null && r.on && Str.has(r.head);
+        String state = m == null ? S_CALM : m.state;
+        String pick = resp ? S_CALM : state;          // 敬重档：范例/边界按 calm 档取（不进怒态）
+        List<String> lines = new ArrayList<String>();
+        lines.add(factLine(c, m, lastEmotion));
+        String head = resp ? r.head : moodHead(c, state);
+        if (Str.has(head)) lines.add(head);
+        String eg = exampleLine(c, pick);
         if (Str.has(eg)) lines.add(eg);
-        String bound = boundLine(c, state);
+        String bound = boundLine(c, pick);
         if (Str.has(bound)) lines.add(bound);
         String self = selfAsk(c);
         if (Str.has(self)) lines.add(self);
+        if (Str.has(cue)) lines.add(cue);              // ★ 可选第 6 行：时机提示（必须在覆盖句之前）
         lines.add(coverLine(c));
         return Str.join(lines, "\n");
+    }
+
+    /**
+     * 不带时机提示的那一支（口径与情绪 v2 <b>逐字节一致</b>）：给"手上没有场合/本轮正文"的调用方用
+     * —— 探针、以及 {@link EmotionProvider} 的降级梯子。
+     */
+    public static String block(EmotionCfg c, Mood m) {
+        return block(c, m, "");
     }
 
     /**

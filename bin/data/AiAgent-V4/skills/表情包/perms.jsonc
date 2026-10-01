@@ -8,16 +8,26 @@
     "Run": {
       // ── 表情包库的收发与打理（sticker）
       // 列表情包库
-      // 改某张的语境 / 备注
-      ["sticker.list", "sticker.remark"]: ["ALLUSER"]
+      // 按语境发一张表情包
+      // ★ 2026-09-24 GM 裁定：ALLUSER 的 Run 面**只放这一条非读 op**（sticker.send）——
+      //   甲方令「她得自发愿意发表情包」，而群友触发的回合里她想发也会被权限挡住 ⇒ 必须放行。
+      ["sticker.list", "sticker.send"]: ["ALLUSER"]
     },
     // ── 谁不能用（压过 Run）
     "Ban": {
       // ── 表情包库的收发与打理（sticker）
       // 清空表情包库
-      // 收藏一张表情包
-      // 按语境发一张表情包
-      ["sticker.clear", "sticker.collect", "sticker.send"]: ["ALLUSER"]
+      // 收藏一张表情包（防群友投毒：谁能让她收图 = 谁能往她库里塞东西）
+      // 改某张的语境 / 备注（2026-09-24 GM 裁定：备注会进她的上下文 ⇒ 对非主人是**低危但持久**的注入面，从 Run 移到 Ban）
+      ["sticker.clear", "sticker.collect", "sticker.remark"]: ["ALLUSER"],
+
+      // ── QQ 侧自定义表情（sticker 的 cf_* 四个动作；NapCat 4.18.5+）
+      // 动的是 QQ 账号侧的真实资源（不是本机库）⇒ 读也一并收紧：非主人一律拒。
+      // 取自定义表情详情 / 列表
+      // 添加一条自定义表情
+      // 删除一条自定义表情（还要 confirm 二次确认）
+      // 改一条自定义表情的描述
+      ["sticker.cf_list", "sticker.cf_add", "sticker.cf_del", "sticker.cf_desc"]: ["ALLUSER"]
     }
   }
 }

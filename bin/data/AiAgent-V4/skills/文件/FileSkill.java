@@ -86,6 +86,19 @@ public class FileSkill implements Skill {
         if (Str.blank(p)) return a.missing("path");
         File f = resolve(root, p);
         if (f == null) return c.t("路径非法", "path", Str.cut(Str.nz(p), 160));
+        // >>> W7BC13 (File-domain check; the "before" copy used by the W7 fixture strips this block)
+        // ★ W7/批 13（GM 2026-09-26 裁决）：<b>File 域</b>也要问一句 ——
+        //   在这之前本技能只判 op（"工具不自己设一道比授权更低的上限"），于是 `file.read` 一旦给
+        //   ALLUSER，任何群友就能读本机任意文本文件；而文件管控表的 `File.Read` 只给 `D:/share/`，
+        //   那一层却从来没人问（既有活口，见 W7 报告 §9-1）。
+        //   现在按"当轮调用者"过一遍 File 域：档位够（favor ≥ favorFileMin）的按好感度档放宽到
+        //   `favorFileRoots` 里的允许根，其余人只能碰表里写明的路径；硬 Ban 子树（例
+        //   `D:/share/SairFrameWork/`、数据根下的 config.json / v4.db / logs）压过一切。
+        //   判定一律问基板（`Host.localFileDeny` → `Acl.fileDeny`），技能不自己写第二套路径规则。
+        //   放在"存在性"之前：被拒时连"这个文件存不存在"都不回答。
+        String pd = h.localFileDeny(h.subject(), f.getPath());
+        if (pd != null) return pd;
+        // <<< W7BC13
         if (!f.exists()) return c.t("不存在", "path", rel(root, f));
         if (f.isDirectory()) return c.t("是目录", "path", rel(root, f));
         if (!f.isFile()) return c.t("不是普通文件", "path", rel(root, f));
@@ -154,6 +167,12 @@ public class FileSkill implements Skill {
         String p = a.str("path");
         File f = resolve(root, Str.blank(p) ? "." : p);
         if (f == null) return c.t("路径非法", "path", Str.cut(Str.nz(p), 160));
+        // >>> W7BC13 (File-domain check; the "before" copy used by the W7 fixture strips this block)
+        // ★ W7/批 13（GM 2026-09-26 裁决）：同 `read`，列目录也要过 File 域 —— 否则档位/路径范围
+        //   只管住了"读内容"，却把"看目录树"整片漏出去。判定口径与放置位置与 `read` 一致。
+        String pd = h.localFileDeny(h.subject(), f.getPath());
+        if (pd != null) return pd;
+        // <<< W7BC13
         if (!f.exists()) return c.t("路径不存在", "path", rel(root, f));
         if (f.isFile()) return c.t("是文件不是目录", "path", rel(root, f));
 
@@ -203,6 +222,15 @@ public class FileSkill implements Skill {
         String p = a.str("path");
         File base = resolve(root, Str.blank(p) ? "." : p);
         if (base == null) return c.t("路径非法", "path", Str.cut(Str.nz(p), 160));
+        // >>> W7BC13 (File-domain check; the "before" copy used by the W7 fixture strips this block)
+        // ★ W7/批 13（GM 2026-09-26 裁决）：扫盘也过 File 域 —— 它既要读文件内容找关键词，
+        //   又会把命中的路径名交回去，比 `read` 漏得更多。**两道**：先判用户点名的那个根
+        //   （fail fast、且不回答"它存不存在"），再在扫描循环里逐个文件判一次 ——
+        //   只判根挡不住"根在允许范围、里面嵌了一棵硬 Ban 子树"（例 `D:/share/` 下面的
+        //   `SairFrameWork/`）。
+        String pd = h.localFileDeny(h.subject(), base.getPath());
+        if (pd != null) return pd;
+        // <<< W7BC13
         if (!base.exists()) return c.t("路径不存在", "path", rel(root, base));
         if (base.isFile()) base = base.getParentFile() == null ? base : base.getParentFile();
 
@@ -222,6 +250,12 @@ public class FileSkill implements Skill {
         for (File f : files) {
             if (scanned++ > maxScanFiles) break;
             if (!f.isFile()) continue;
+            // >>> W7BC13 (per-file File-domain check; stripped in the "before" copy)
+            // ★ W7/批 13：逐个文件再过一次 File 域（理由见上面那段）。被拒的文件**静默跳过**
+            //   （不是整条失败）：扫描本来就是"在允许的树里找"，扫到禁区的枝就绕开 ——
+            //   不把禁区的存在、名字、内容以任何形式回给她。
+            if (h.localFileDeny(h.subject(), f.getPath()) != null) continue;
+            // <<< W7BC13
             boolean nameHit = f.getName().toLowerCase().indexOf(low) >= 0;
             String contentInfo = "";
             if (!nameHit && f.length() > 0 && f.length() <= maxScanBytes) {
@@ -319,8 +353,25 @@ public class FileSkill implements Skill {
 
         File f = resolve(root, p);
         if (f == null) return c.t("路径非法", "path", Str.cut(Str.nz(p), 160));
-        // 能写哪儿由技能管控表判（技能不设"必须落在数据根以内"的上限）：见分支开头的 op 判定 ——
-        // op 写的是 {@code file.write}（不区分路径落在哪里），放行就是能写。
+        // >>> W15D1
+        // ★ W15/批 15（2026-09-26，甲方票据：`file.write` 没有路径上限）：批 13 只给
+        //   read / list / find 补了下面那道 File 域判定（见上面三处 `W7BC13` 块），**write 漏了** ——
+        //   于是 `file.write` 一旦给 ALLUSER，拿到这个 op 的人就能往本机任意可写位置落文件：
+        //   绝对路径（例 `%TEMP%\x\pwned.txt`）与"数据根相对 + `..` 逃逸"（`../outside.txt`）
+        //   都能落地，硬 Ban 子树（数据根下的 config.json / v4.db / logs、`D:/share/SairFrameWork/`）
+        //   也照写不误 —— 而同一个调用者用 read 读同一棵树是会被拒的（口径不一致）。
+        //   实测落点见夹具 `tmp\v6-real\batch6\W15d`（改前真被写到数据根外面）。
+        //   改法与批 13 逐条一样：**问基板**（`Host.localFileDeny` → `Acl.fileDeny`），技能不自己写
+        //   第二套路径规则。放在 `resolve` 之后、动手之前：被判死时连"这个落点存不存在"都不回答，
+        //   更不会落盘。授权仍由分支开头那一判 `h.need("file.write")` 说了算，这里一个字没放宽；
+        //   主人 / 她本人（`Acl.isFree`）恒 null ⇒ 逐字节不变。
+        //   注：`Host.localFileDeny` 交出去的是 **Read** 口径（`acl.fileDeny(..., false)`）——
+        //   本车道只拥有技能这两个文件，写侧口径若要单开一路，那是基板出口的事（不在本文件里改）。
+        String wd = h.localFileDeny(h.subject(), f.getPath());
+        if (wd != null) return wd;
+        // 落点的上限现在是上面那道 File 域判定（W15D1）；改之前这里写的是"能写哪儿由技能管控表判
+        // （技能不设'必须落在数据根以内'的上限）"—— 那句话对 read 早就被批 13 推翻了，对 write 也在批 15 推翻。
+        // <<< W15D1
         if (f.exists() && f.isDirectory()) return c.t("写入是目录", "path", rel(root, f));
 
         long old = f.isFile() ? f.length() : 0L;

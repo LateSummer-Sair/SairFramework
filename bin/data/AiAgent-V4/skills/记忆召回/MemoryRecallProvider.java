@@ -8,16 +8,19 @@ import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import sair.v4.auth.Caller;
 import sair.v4.ext.BuildContext;
 import sair.v4.ext.ContextProvider;
 import sair.v4.kit.J;
 import sair.v4.kit.Str;
+import sair.v4.skill.ConfView;
 import sair.v4.skill.Host;
 import sair.v4.store.Store;
 
@@ -29,13 +32,72 @@ import sair.v4.store.Store;
  *   <li>{@link ContextProvider}，{@link #stable()} = {@code false}（<b>易变段</b>）——
  *       这一段随本轮用户话变，放进稳定前缀会让前缀缓存每轮都失效
  *       （段位口径见 {@code ContextProvider} 类注释）；</li>
- *   <li>{@link #order()} = {@code 10}；{@link #maxChars()} = {@code prompt.md} 的「预算」（默认 1200）。</li>
+ *   <li>{@link #order()} = {@code 10}；{@link #maxChars()} = {@code prompt.md} 的「预算」（出厂 2000）。</li>
  * </ul>
  *
+ * <h3>★ 热召回（批 18 / ID-CROSS+MEM，2026-09-27）：查询串 = 本轮正文 + 最近 K 条本会话对话</h3>
+ * <p>甲方原话：「记忆库各种记忆应该是<b>热数据</b>而不是冷数据，在对话中要索引到以前交流过的类似事情中。」
+ * 改之前查询<b>只有本轮这一句正文</b>（{@code b.text()}）：像「那我养的那只呢？」这种<b>没有关键词的短追问</b>
+ * 拿去查库，命中的是"那 / 只"这类噪声，聊过的类似事一条都捞不上来 —— 那正是"冷"。</p>
+ * <p>现在查询串 = <b>本轮正文 + 最近 K 条本会话对话正文</b>（{@link #query}，K = {@code prompt.md} 的
+ * 「追问条数」，出厂 {@value #DEF_FOLLOW}；拼完的上限 = 「查询上限」，出厂 {@value #DEF_QCAP} 字符，
+ * 超了保留<b>最新</b>的那一段）。三条纪律：</p>
+ * <ol>
+ *   <li><b>会话隔离</b>：只用 {@code Store.recentDialog(本轮会话键, K)}（SQL 里 {@code WHERE session = ?}，
+ *       走 {@code idx_dialog_session}）—— <b>本会话</b>的对话，绝不并别的会话的行。
+ *       会话键拿不到（空串）⇒ <b>退回"只有本轮正文"</b>，绝不退化成"全表最近 K 条"
+ *       （{@code recentDialog("")} 的口径是整表，所以这一条必须在调用方挡住）；</li>
+ *   <li><b>门槛判据不变形</b>：{@link #meaningful} 改用<b>合并后的串</b>判（短追问因此也过得了门槛），
+ *       合并后仍不够格 ⇒ <b>仍不查</b>。没有本轮正文（收尾回合 / 系统装配）⇒ 直接不查 —— 与改前逐字节相同；</li>
+ *   <li><b>归属过滤一个字不动</b>：{@link #visible} 照旧按"这一轮的目标会话"逐条比
+ *       （{@code grouplog} 认群、{@code memory} 认 {@code global}/{@code user:目标人}/{@code group:目标群}）。
+ *       查询变长<b>不会</b>让别人的行变成"他的事"—— 能不能注入只由 {@link #visible} 回答。</li>
+ * </ol>
+ * <p><b>已知代价（如实）</b>：查询变长之后，{@code Store.search} 的第②层（拆词 OR，最多
+ * {@code FtsQuery.DEFAULT_MAX_TERMS} = 8 项、超出时<b>均匀采样</b>）会按整串抽词，本轮正文的词
+ * 在长查询里只占少数名额。实测口径与后果见报告；本轮正文放在<b>串首</b>（采样含下标 0），
+ * 所以它至少保得住一项。</p>
+ *
+ * <h3>★ 窗口剔重（批 18b / ID-CROSS+MEM-FIX，2026-09-27）：本轮上下文里已经有的行不再注入第二遍</h3>
+ * <p><b>治什么（全量门禁唯一一条红的靶子）</b>：热召回让查询串变长以后，FTS 会命中<b>上一轮刚说过</b>
+ * 的那条群聊 —— 而那条消息本来就已经由基板注入了：要么在「本会话最近 N 条聊天记录」那个窗口里，
+ * 要么（被 {@code ChatWindow} 的"历史已有"去重压掉时）在对话历史里。于是<b>同一条消息在同一个请求体里
+ * 出现两次</b>（一次是基板给的那一份，一次是本段"相关记忆"里那一份）。
+ * 门禁 {@code ProbeMediaOnly} ⑫ M3「甲的渲染串在乙的请求体里只出现一次」就是钉这件事的
+ * （既有判据，只许修机制、不许放松）。</p>
+ *
+ * <p><b>判据是行身份，不是内容</b>（见 {@link Win#drops}）：被剔掉的条件是
+ * "<b>这一行自己的 {@code id}</b> 落在本会话窗口的取数范围里"，不是"这条内容看着像窗口里的某条"。
+ * 内容比对会误杀（同一个人两次说一样的话是两条不同的消息），行身份不会。</p>
+ *
+ * <p><b>窗口是什么</b>（与基板 {@code ctx.ChatWindow} 同一个判据、同一个数）：本会话最近的
+ * {@code chatWindowSize} 条 —— 群会话取该群 {@code grouplog}、私聊/控制台取 {@code dialog}；
+ * 条数从配置面 {@code Host.conf().getInt("chatWindowSize", …)} 读，缺配置面用基板出厂默认
+ * {@value sair.v4.Conf#DEF_CHAT_WINDOW_SIZE}，并按 {@code ChatWindow.MAX_ROWS} 夹住
+ * （{@code <=0} = 基板不带窗口 ⇒ 不剔）。</p>
+ *
+ * <p><b>为什么可以用"窗口的取数范围"而不是"窗口最终渲染出来的那几行"</b>：
+ * {@code ChatWindow} 之后还有三道自己的去重（同 {@code msg_id} 重复 / 她自己那两行 / 历史已有），
+ * 被它们压掉的行，<b>它的内容仍然在上下文里</b>（在那条重复行上，或在对话历史里）——
+ * 所以按取数范围剔重<b>不会丢信息</b>，而按"最终渲染"剔就会漏（M3 那条红的行恰恰是被
+ * "历史已有"压掉的那一行）。</p>
+ *
+ * <p><b>只剔本会话窗口那一支</b>：跨群 {@code grouplog}（别的群的群聊）与 {@code memory} 库
+ * <b>一个字都不动</b> —— 那是本段的正当产出。跨表主键不可比，所以 {@link Win} 自带"哪张表"的标签，
+ * <b>结构上不可能</b>拿 {@code dialog} 的 id 去剔 {@code grouplog} 的行（反之亦然）。
+ * 私聊/控制台的窗口是 {@code dialog}，而本段在那些会话里<b>一条 {@code grouplog} 都不产出</b>
+ * （{@link #visible} 认目标群），所以那一支恒为空交集。</p>
+ *
+ * <p><b>退化（逐条）</b>：配置面拿不到 ⇒ 按出厂默认 30 算（<b>宁可少剔、绝不误删</b>）；
+ * {@code chatWindowSize <= 0} ⇒ 不剔（基板那一轮本来就没有窗口）；窗口读不出来
+ * （{@code Store} 抛异常）⇒ 不剔（少一层，不报错）；行 {@code id <= 0} ⇒ 不剔。
+ * 剔重发生在取回之后，<b>不回填</b>：那一段可能因此少于 {@code 跨群条数} 行 ——
+ * 少掉的那些本来就已在上下文里，不构成信息损失。</p>
+ *
  * <h3>数据从哪来（只读）</h3>
- * <p>只用 {@link Host} 能力面：{@code h.store().search(...)}。本插件<b>不建库、不写库、无副作用</b>
- * （{@code BuildContext.subagent()} 为真时也一样 —— 因为压根没有写路径）。
- * 查询 {@code memory}（本会话口径 8 条）与 {@code grouplog}（跨群群聊 5 条）。</p>
+ * <p>只用 {@link Host} 能力面：{@code h.store().search(...)} 与 {@code h.store().recentDialog(...)}
+ * —— 两支都是读。本插件<b>不建库、不写库、无副作用</b>（{@code BuildContext.subagent()} 为真时也一样 ——
+ * 因为压根没有写路径）。查询 {@code memory}（本会话口径 12 条）与 {@code grouplog}（跨群群聊 8 条）。</p>
  *
  * <h3>归属硬判（技能管控表只管技能 —— 这里判的是数据归属）</h3>
  * <p>检索结果<b>不能整锅端进这一轮的上下文</b>：{@code Store.search} 没有作用域过滤，
@@ -66,7 +128,7 @@ import sair.v4.store.Store;
  * （判据只有 {@link #isSelfMark} 一处）：</p>
  * <ol>
  *   <li>{@code grouplog}（跨群群聊）命中行：<b>① 整行跳过</b>。理由三条：① 这一段是<b>预算稀缺</b>的注入面
- *       （{@code 跨群条数} 5 行 / {@code 预算} 1200 字），机器外壳会挤掉真群友的行；
+ *       （{@code 跨群条数} 8 行 / {@code 预算} 2000 字），机器外壳会挤掉真群友的行；
  *       ② 行模板 {@code - [群{group}] {nickname}: {content}} 里<b>没有</b>"是她发的"这个面，
  *       而标记行没有可信昵称（{@code nickname} 空 ⇒ 退成 {@code 某人}）⇒ 会被当成<b>某个群友的发言</b>；
  *       ③ 她自己的行已经由基板窗口给她看（P0-1 的本意），{@code grouplog} 里那一行也没被删 ——
@@ -76,15 +138,19 @@ import sair.v4.store.Store;
  *       跳过就等于抹掉事实。</li>
  * </ol>
  *
- * <h3>数字出处（V3 原样，见 notes/feel-plugins.md 第二节）</h3>
+ * <h3>数字出处（V3 原样，见 notes/feel-plugins.md 第二节；★ 项是本批抬过的档）</h3>
  * <ul>
- *   <li>8 条 / 5 条：{@code QQPromptBuilder.java:695} / {@code :706}；</li>
+ *   <li>★ 12 条 / 8 条（抬档前 8 / 5）：{@code QQPromptBuilder.java:695} / {@code :706}；</li>
  *   <li>查询门槛：{@code hasMeaningfulQuery} = {@code text.replaceAll("[\\s\\p{Punct}]+","").length() >= 4}
- *       （{@code QQPromptBuilder.java:719-722}）—— 短语气词不触发检索；</li>
+ *       （{@code QQPromptBuilder.java:719-722}）—— 短语气词不触发检索；
+ *       {@code prompt.md} 现写 2（比 V3 松，本车道不改这个数）；</li>
  *   <li>单条 300 字截断：{@code QQPromptBuilder.java:700}；跨群单条 160 字：{@code UnifiedQQMemoryManager.java:798}；</li>
  *   <li>跨群行是 {@code "[群" + groupId + "] " + 昵称 + ": " + 内容}（{@code UnifiedQQMemoryManager.java:799}）；</li>
  *   <li>标题：{@code labels/qq.md} 的 {@code title.related-memories}=相关记忆、
- *       {@code title.cross-group-related}=跨群相关群聊记录（中文标题，见 md 第六节 1 的默认做法）。</li>
+ *       {@code title.cross-group-related}=跨群相关群聊记录（中文标题，见 md 第六节 1 的默认做法）；</li>
+ *   <li>★ 热召回（追问条数 / 查询上限）：V3 <b>没有</b>对应物（V3 也只用本轮正文当查询，见
+ *       {@code QQPromptBuilder.java:695} 附近）—— 这两项是本批新加的，出厂值
+ *       {@value #DEF_FOLLOW} 条 / {@value #DEF_QCAP} 字符，与 {@code prompt.md} 一一对应。</li>
  * </ul>
  *
  * <h3>文案与阈值</h3>
@@ -109,12 +175,16 @@ public class MemoryRecallProvider implements ContextProvider {
     private static final String DEF_TIME = "yyyy-MM-dd HH:mm";
     private static final String DEF_TAIL = "...";
     private static final String DEF_ANON = "某人";
-    private static final int DEF_N = 8;
-    private static final int DEF_XN = 5;
+    private static final int DEF_N = 12;
+    private static final int DEF_XN = 8;
     private static final int DEF_MINQ = 4;
-    private static final int DEF_BUDGET = 1200;
+    private static final int DEF_BUDGET = 2000;
     private static final int DEF_CUT = 300;
     private static final int DEF_XCUT = 160;
+    /** ★ 热召回：并进查询的"最近 N 条本会话对话"（{@code prompt.md} 的「追问条数」）。 */
+    private static final int DEF_FOLLOW = 8;
+    /** ★ 热召回：合并后查询串的字符上限（{@code prompt.md} 的「查询上限」）；超了保留最新的一段。 */
+    private static final int DEF_QCAP = 600;
 
     // ==================== ★ 她自己的标记行（P1-selfsee 唯一一处判据） ====================
 
@@ -171,7 +241,7 @@ public class MemoryRecallProvider implements ContextProvider {
 
     /**
      * {@link #maxChars()} 的签名里没有 Host（基板调它时不给上下文），
-     * 所以只能把「最近一次从 prompt.md 读到的预算」记下来 —— 第一次调用之前是兜底 1200。
+     * 所以只能把「最近一次从 prompt.md 读到的预算」记下来 —— 第一次调用之前是兜底 2000。
      */
     private volatile int budget = DEF_BUDGET;
 
@@ -207,27 +277,31 @@ public class MemoryRecallProvider implements ContextProvider {
             // 本 provider 只读、不写，也没有工具：它跑在扩展点的判定主体下（没有触发者时 = SYSTEM），
             // 技能管控表只管控技能（工具 / op），所以这里<b>没有</b>任何 op 判定 ——
             // 能不能注入由"目标会话"与下面的逐条归属过滤回答（见 visible）。
-            String q = b.text();
+            String q = query(b, s, c);
             String filter = one(c, "查询过滤正则", DEF_FILTER);
             int min = num(c, "最小查询字数", DEF_MINQ);
-            if (!meaningful(q, filter, min)) return "";     // 短语气词不触发检索（V3 口径）
+            if (!meaningful(q, filter, min)) return "";     // 合并后仍不够格 ⇒ 仍不查（与改前同一判据）
 
             // 过滤依据 = "这一轮要说话的那个会话"（不是触发者）：SYSTEM / 没有触发者时
             // 目标群号从会话键或 snapshot 事实里解出来（见 aim）。
             Aim aim = aim(b);
+            // ★ 窗口剔重（ID-CROSS+MEM-FIX）：本轮上下文里**已经有的那几行**的行身份集合。
+            // 只在这一轮真的要查库时才取（门槛已经过了），且只作用于 grouplog 那一支。
+            int winSize = windowSize(h);
+            Win win = winSize <= 0 ? null : window(s, aim.group, b.session(), winSize);
             SimpleDateFormat fmt = timeFmt(one(c, "时间格式", DEF_TIME));
             String tail = one(c, "截断尾巴", DEF_TAIL);
             String anon = one(c, "匿名昵称", DEF_ANON);
             List<String> blocks = new ArrayList<String>();
 
             List<String> mem = render(s, LIB_MEM, q, num(c, "条数", DEF_N),
-                    one(c, "行模板", DEF_LINE), num(c, "单条上限", DEF_CUT), tail, fmt, anon, false, aim);
+                    one(c, "行模板", DEF_LINE), num(c, "单条上限", DEF_CUT), tail, fmt, anon, false, aim, null);
             if (!mem.isEmpty()) blocks.add(pack(one(c, "标题", DEF_TITLE), one(c, "说明", DEF_LEAD), mem));
 
             if (flag(c, "跨群开关", true)) {
                 List<String> cross = render(s, LIB_LOG, q, num(c, "跨群条数", DEF_XN),
                         one(c, "跨群行模板", DEF_XLINE), num(c, "跨群单条上限", DEF_XCUT), tail, fmt, anon, true,
-                        aim);
+                        aim, win);
                 if (!cross.isEmpty()) blocks.add(pack(one(c, "跨群标题", DEF_XTITLE), one(c, "跨群说明", ""), cross));
             }
 
@@ -236,6 +310,189 @@ public class MemoryRecallProvider implements ContextProvider {
         } catch (Throwable t) {
             return "";                                      // 插件绝不拖垮一轮对话
         }
+    }
+
+    // ==================== ★ 热召回：本轮检索用的查询串（批 18 / ID-CROSS+MEM） ====================
+
+    /**
+     * ★ <b>本轮检索用的查询串</b>（批 18 / ID-CROSS+MEM，2026-09-27）= <b>本轮正文 + 最近 K 条本会话对话</b>。
+     *
+     * <p><b>治什么</b>：改动之前查询只有本轮这一句正文 —— 「那我养的那只呢？」这类<b>没有关键词的短追问</b>
+     * 拿去查库，既过不了"有意义的词"，也捞不回"以前聊过的类似事"。把刚说过的那几句一起带上，
+     * 同一句话就能索引到之前那轮问答（"我养的那只叫什么 / 团子"）。</p>
+     *
+     * <p><b>退化链（逐条都要能断言）</b>：</p>
+     * <ol>
+     *   <li>{@code b == null} / 本轮正文为空 ⇒ 返回空串（调用方的 {@link #meaningful} 判假 ⇒
+     *       <b>不查库</b>）—— 收尾回合 {@code assembleSystem} 传的正文就是空串，与改前逐字节相同；</li>
+     *   <li>「追问条数」{@code <= 0} 或「查询上限」{@code <= 0}（配置写坏 / 主人关掉）⇒ 只有本轮正文；</li>
+     *   <li>会话键为空 ⇒ 只有本轮正文（{@code recentDialog("")} 是<b>整表</b>口径，绝不能走到那里）；</li>
+     *   <li>本轮正文本身就 ≥ 查询上限 ⇒ 只有本轮正文（一个字都不加，也不截断正文）；</li>
+     *   <li>取不到对话 / 没有可用的历史行 ⇒ 只有本轮正文；</li>
+     *   <li>拼完超过上限 ⇒ 保留<b>最新</b>的那一段（{@link #tail}，不劈开代理对）。</li>
+     * </ol>
+     *
+     * <p><b>顺序</b>：本轮正文在<b>串首</b>，历史按"老 → 新"跟在后面。串首这一位不是装饰：
+     * {@code Store.search} 的拆词 OR 层最多 8 项、超出时<b>均匀采样</b>，采样点含下标 0
+     * ⇒ 本轮正文的词<b>至少保得住一项</b>（这是在不改 {@code FtsQuery} 的前提下能做的最稳的摆法）。</p>
+     */
+    private static String query(BuildContext b, Store s, Map<String, List<String>> c) {
+        String base = b == null ? "" : Str.trim(Str.nz(b.text()));
+        if (!Str.has(base)) return "";                          // 没有本轮正文 ⇒ 不查（原语义）
+        int k = num(c, "追问条数", DEF_FOLLOW);
+        int cap = num(c, "查询上限", DEF_QCAP);
+        if (k <= 0 || cap <= 0) return base;                    // 关掉 / 配置写坏 ⇒ 只有本轮正文
+        String sess = b == null ? "" : Str.trim(b.session());
+        if (Str.blank(sess)) return base;                       // ★ 会话隔离：拿不到会话键就不并历史
+        if (base.length() >= cap) return base;                  // 正文本身超上限 ⇒ 只查正文
+        String his = history(s, sess, k, base);
+        if (Str.blank(his)) return base;
+        int room = cap - base.length() - 1;                     // 1 = 中间那个空格
+        if (his.length() > room) his = tail(his, room);         // 超上限：保留最新的一段
+        return base + " " + his;
+    }
+
+    /**
+     * 最近 {@code k} 条<b>本会话</b>对话正文，按"老 → 新"拼成一行；取不到返回空串。
+     *
+     * <p>{@code Store.recentDialog(session, k)} 的 SQL 是 {@code WHERE session = ? ORDER BY ts DESC, id DESC
+     * LIMIT k}（走 {@code idx_dialog_session}）—— <b>会话隔离由这一句 SQL 保证</b>，
+     * 本方法不自己拼任何跨会话的东西。</p>
+     *
+     * <p><b>剔掉本轮正文那一行</b>：{@code Agent.ask} 在装配<b>之前</b>就把本轮输入写进 {@code dialog} 了
+     * （见它那一行的注释），所以最新一条往往就是本轮正文本人。逐字相等就跳过 ——
+     * 同一句话在查询里出现两遍只会白白挤掉别的词。</p>
+     */
+    private static String history(Store s, String session, int k, String base) {
+        List<JsonObject> rows;
+        try {
+            rows = s.recentDialog(session, k);
+        } catch (Throwable t) {
+            return "";                                          // 取不到 ⇒ 退回"只有本轮正文"
+        }
+        if (rows == null || rows.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        for (JsonObject r : rows) {
+            if (r == null) continue;
+            String txt = Str.oneLine(Str.nz(J.s(r, "content", "")));
+            if (Str.blank(txt)) continue;
+            if (txt.equals(base)) continue;                     // 本轮正文那一行：不重复计入
+            if (sb.length() > 0) sb.append(' ');
+            sb.append(txt);
+        }
+        return sb.toString();
+    }
+
+    /** 取字符串<b>尾部</b> {@code n} 个字符（不劈开代理对）；{@code n <= 0} → 空串。 */
+    private static String tail(String s, int n) {
+        if (s == null) return "";
+        if (n <= 0) return "";
+        if (s.length() <= n) return s;
+        int from = s.length() - n;
+        if (from > 0 && Character.isLowSurrogate(s.charAt(from))) from--;   // 别把代理对劈成两半
+        return s.substring(from);
+    }
+
+    // ==================== ★ 窗口剔重：本轮上下文里已经有的行不再注入第二遍（批 18b） ====================
+
+    /**
+     * 「本轮上下文里<b>已经有</b>的那几行」的行身份集合 —— 本段据此不重复注入（见类注释「窗口剔重」）。
+     *
+     * <p><b>为什么要带一个"哪张表"的标签</b>：{@code grouplog} 与 {@code dialog} 的主键各自成序列，
+     * <b>跨表比 id 是错的</b>（{@code dialog} 的 42 与 {@code grouplog} 的 42 是两条毫不相干的行）。
+     * 所以这里记住这份 id 是从哪张表取的，{@link #drops} 只在<b>同表</b>时才可能命中 ——
+     * 结构上不可能拿私聊窗口的 id 去剔一条群聊记录。</p>
+     */
+    private static final class Win {
+
+        /** {@code true} = 这份 id 来自群窗口（{@code grouplog}）；{@code false} = 私聊/控制台窗口（{@code dialog}）。 */
+        final boolean group;
+        final Set<Long> ids;
+
+        Win(boolean group, Set<Long> ids) {
+            this.group = group;
+            this.ids = ids;
+        }
+
+        /**
+         * 这一条（{@code lib} 这个库里的 {@code id}）该不该因为"窗口里已经有"被剔掉。
+         *
+         * <p>三个条件：① {@code id > 0}（{@code <=0} = 这一行没有稳定身份，绝不拿它去比）；
+         * ② 这份集合与这个库<b>同表</b>（跨表主键不可比）；③ id 真的在集合里。</p>
+         */
+        boolean drops(String lib, long id) {
+            if (id <= 0L) return false;
+            if (group != LIB_LOG.equals(lib)) return false;
+            return ids.contains(Long.valueOf(id));
+        }
+    }
+
+    /**
+     * <b>本会话窗口的大小</b>：配置 {@code chatWindowSize}，与基板 {@code ctx.ChatWindow.size(conf)}
+     * 同一个数、同一个夹取（{@code <=0} = 不带窗口 ⇒ 0）。
+     *
+     * <p><b>为什么问基板配置而不在 {@code prompt.md} 里再立一个键</b>：窗口是基板注进去的，
+     * 大小只有那一个真源。本插件再存一份就会漂（主人把 {@code chatWindowSize} 改成 200、
+     * 本插件还按 30 剔 ⇒ 后 170 行会重新出现"同一行两遍"）。
+     * 所以这里只<b>读</b>那一个键，缺配置面时用基板出厂默认
+     * （{@value sair.v4.Conf#DEF_CHAT_WINDOW_SIZE}）—— 方向是"<b>宁可少剔、绝不误删</b>"：
+     * 少剔只可能漏掉一条去重，误删会把用户没见过的内容一起砍掉。</p>
+     *
+     * @return 窗口条数；{@code <=0} = 这一轮没有窗口（不剔）
+     */
+    private static int windowSize(Host h) {
+        int n = sair.v4.Conf.DEF_CHAT_WINDOW_SIZE;
+        try {
+            ConfView cf = h == null ? null : h.conf();
+            if (cf != null) n = cf.getInt("chatWindowSize", n);
+        } catch (Throwable ignored) {
+            // 配置面拿不到 ⇒ 按出厂默认算（见上面"宁可少剔"）
+        }
+        if (n <= 0) return 0;
+        // 夹取与基板同源（ChatWindow.MAX_ROWS）：写大了两边一起夹住，不会一边 200 一边 100000
+        return n > sair.v4.ctx.ChatWindow.MAX_ROWS ? sair.v4.ctx.ChatWindow.MAX_ROWS : n;
+    }
+
+    /**
+     * <b>本会话窗口里那几行的 id</b>（行身份）。与基板 {@code ctx.ChatWindow.facts} 同一判据、同一批行：
+     * 群会话取该群 {@code grouplog}、私聊/控制台取 {@code dialog}，都是"最近 {@code n} 条"。
+     *
+     * <p>两条查询复用 {@link Store} 上<b>现成</b>的两支（{@code recentGrouplog} / {@code recentDialog}）：
+     * 它们的内层 SQL 与 {@code ChatWindow.tailGrouplog} / {@code tailDialog} <b>逐字同口径</b>
+     * （{@code ORDER BY ts DESC, id DESC LIMIT n}，走各自那个索引），所以拿到的就是窗口取数范围那一批行
+     * —— 本插件<b>不新写 SQL</b>、不建表、不写库。</p>
+     *
+     * <p><b>为什么是"取数范围"而不是"窗口最终渲染出来的行"</b>：{@code ChatWindow} 之后还有三道
+     * 自己的去重，被压掉的行其内容仍在上下文里（重复行/对话历史），所以按取数范围剔不会丢信息，
+     * 而按最终渲染剔会漏掉门禁 M3 那条红的行（它是被"历史已有"压掉的那一行）。见类注释。</p>
+     *
+     * @param gid     目标群号（{@code >0} = 群会话）；{@code <=0} = 私聊/控制台
+     * @param session 会话键（私聊/控制台那一支要用）
+     * @param n       窗口条数（{@link #windowSize}；{@code <=0} = 不剔）
+     * @return 这份集合；<b>拿不到窗口 / 读不出来 / 一行都没有 ⇒ {@code null}</b>（= 不剔，安静降级）
+     */
+    private static Win window(Store s, long gid, String session, int n) {
+        if (s == null || n <= 0) return null;
+        List<JsonObject> rows;
+        try {
+            if (gid > 0L) {
+                rows = s.recentGrouplog(gid, n);                 // 群：窗口取的就是该群 grouplog
+            } else if (!Str.blank(session)) {
+                rows = s.recentDialog(session, n);               // 私聊/控制台：窗口取 dialog
+            } else {
+                return null;                                     // 连会话键都拿不到 ⇒ 不知道窗口是什么，不剔
+            }
+        } catch (Throwable t) {
+            return null;                                         // 读不出来 ⇒ 少一层去重（不报错、不抛）
+        }
+        if (rows == null || rows.isEmpty()) return null;
+        Set<Long> ids = new HashSet<Long>();
+        for (JsonObject r : rows) {
+            if (r == null) continue;
+            long id = J.l(r, "id", 0L);
+            if (id > 0L) ids.add(Long.valueOf(id));
+        }
+        return ids.isEmpty() ? null : new Win(gid > 0L, ids);
     }
 
     // ==================== 渲染 ====================
@@ -257,10 +514,12 @@ public class MemoryRecallProvider implements ContextProvider {
      *
      * @param dedupe 跨群那一段按 V3 口径去重（V3 用 LinkedHashSet 收跨群命中行）
      * @param aim    本轮的目标会话（{@link #aim}）：能不能注入由它裁
+     * @param win    本轮"窗口里已经有"的行身份集合（{@link Win}）；{@code null} = 不做这一层。
+     *               只对 {@code grouplog} 生效（跨表主键不可比，见 {@link Win#drops}）
      */
     private static List<String> render(Store s, String lib, String q, int n, String tpl,
                                        int cut, String tail, SimpleDateFormat fmt,
-                                       String anon, boolean dedupe, Aim aim) {
+                                       String anon, boolean dedupe, Aim aim, Win win) {
         List<String> out = new ArrayList<String>();
         List<JsonObject> rows;
         try {
@@ -273,6 +532,9 @@ public class MemoryRecallProvider implements ContextProvider {
         for (JsonObject r : rows) {
             if (r == null) continue;
             if (!visible(aim, lib, r)) continue;             // 归属硬判：别人的 / 别群的条目在这里出局
+            // ★ 窗口剔重（ID-CROSS+MEM-FIX）：这一行**本轮上下文里已经有**（在窗口里，或在被
+            //   "历史已有"压掉后仍在对话历史里）⇒ 不再注入第二遍。判据是行身份（id），不是内容。
+            if (win != null && win.drops(lib, J.l(r, "id", 0L))) continue;
             // ★ P1-selfsee：她自己的标记行不进"跨群群聊"那一段（机器外壳不是群友发言）。
             // 只对 grouplog 生效：memory 是记忆本体，不适用（见类注释）。
             if (LIB_LOG.equals(lib) && isSelfMark(r)) continue;

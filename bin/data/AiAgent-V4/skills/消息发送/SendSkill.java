@@ -179,10 +179,53 @@ public class SendSkill implements Skill {
         boolean group = me != null && me.toGroup();
         long id = group ? me.groupId() : (me == null || me.isConsole() ? 0L : me.qq());
         if (id <= 0L) return msg(c, "缺会话", "no_session");
+        // >>> W15D1-A4
+        // ★ 甲方 2026-09-26 新令（A4）：东西只发**当前会话**（群里=群文件、私聊=她正在说话的那个人的私聊），
+        //   **不许**把一份东西转投到**另一个人的私聊**去 —— 理由不是隐私，是"别去打扰别人"。
+        //   `file` 按定义就只发当前会话（`消息发送.md` 第 223 行："file 是唯一例外 —— 它按定义只发当前会话，
+        //   要发给指定的人用 fileto"），所以参数里点名了**别的**群 / **别的**人 = 与当前会话不符
+        //   ⇒ 当场拒、一个字不发（放在 op 判定之后，这一条是落点规则，不动 `send.file` 那一判）。
+        //   一致（就是当前会话）或压根没给 group/qq ⇒ 照旧走下面那条路，行为逐字不变。
+        String off = offSession(a, c, group, id);
+        if (off != null) return off;
+        // <<< W15D1-A4
 
         if (!h.napcatConnected()) return Api.NOT_CONNECTED;
 
-        JsonObject r = group ? h.napcat().sendGroupFile(id, file, name) : h.napcat().sendPrivateFile(id, file, name);
+        // ★ 2026-09-26（W7/批 13）：走基板的"以她自己身份发文件"出口（`Host.sayFile`）。
+        //   为什么必须走：`send.file` 对 ALLUSER 是 Ban，好感度档位闸（favor >= favorFileMin）
+        //   会把它按档放行 —— 可内层平台动作 `upload_group_file` 同样对 ALLUSER 是 Ban，
+        //   那一跳会按"当轮调用者 = 群友"判死（与批 10 的 `send.record` / `sayMedia` 同一缺陷、
+        //   同一改法）。出口把**内层动作**改按 SYSTEM（她本人恒全权）判，并把 File 域的路径判定
+        //   显式按**触发者**过一遍（出口内那一步不许省，见 `Host.sayFile` 的 javadoc）。
+        //   技能 op（上面那一判 `send.file`）仍是唯一授权闸门，本口一个字都不放宽它。
+        //   落点不是当前会话 / 档位不够 / 没绑定调用者 / NapCat 面没装配 ⇒ 出口返回 null
+        //   ⇒ 按改前那条路原样发（行为逐字一致），并打同一形状的回退事实行（`via=old`）。
+        // 交给平台的 file 值：结构性默认 = 入参原样（这就是本文件历史上那条路，改前逐字节如此）。
+        String source = file;
+        // >>> W15D1-A1
+        // ★ 2026-09-26（W15/批 15，甲方裁决 A1）：**同族 API 口径不一致** —— 同一个相对路径
+        //   `files/gm-accept.txt`，`file op=read/list` 认（FileSkill 按数据根解析），`send op=file/fileto`
+        //   却把原样字符串交给平台。真机逐字证据（2026-09-26 18:16:47，已部署批 13/14，群 121873503）：
+        //   18:16:45 `file {"op":"read","path":"files/gm-accept.txt"}` → `[tool] file … ok=1`，
+        //   两秒后 `send {"op":"file","file":"files/gm-accept.txt"}` → `upload_group_file` →
+        //   `{"status":"failed","retcode":1200,…"识别URL失败, uri= files/gm-accept.txt"}`；
+        //   她又白绕了 ~5 轮（list/config/tools 乱试 + 两次猜绝对路径）才放弃，群里没拿到文件也没有解释。
+        //   口径（GM 裁决）：绝对路径 / URL 形态（http:// https:// base64:// file:…）**一个字节都不动**；
+        //   其余按 **FileSkill 那一套同一个基**（`h.conf().root()`）与**同一套归一化**（getCanonicalFile
+        //   + toRealPath 解 junction）解析；基/配置拿不到或解析不了 ⇒ 保持旧行为（原样字符串），绝不猜。
+        //   注意：技能目录**不是 classpath**（`SkCompile`：每个文件夹单独编译进内存），所以这里没法引用
+        //   `FileSkill.resolve` —— 基板里也没有共享的路径解析口（`Fs` 没有），只能照抄同一套规则（见 sendPath）。
+        source = sendPath(h, file);
+        // <<< W15D1-A1
+        JsonObject r = h.sayFile("send.file", group, id, source, name);
+        if (r == null) {
+            r = group ? h.napcat().sendGroupFile(id, source, name) : h.napcat().sendPrivateFile(id, source, name);
+            log(h, "say file via=old ok=" + (Api.ok(r) ? 1 : 0)
+                    + " by=" + (me == null ? "?" : me.kind() + ":" + me.qq())
+                    + " target=" + targetLabel(c, group, id)
+                    + (Api.ok(r) ? "" : " error=" + detail(c, r)));
+        }
         if (!Api.ok(r)) {
             return msg(c, "发送失败", "send_fail op={op} error={error}", "{op}", "file", "{error}", detail(c, r));
         }
@@ -195,6 +238,18 @@ public class SendSkill implements Skill {
         // 这个动作分支的 op 判定（技能管控表：op 放行才动手）
         String deny = h.need("send.fileto");
         if (deny != null) return deny;
+        // >>> W15D1-A4
+        // ★ 甲方 2026-09-26 新令（A4）：`fileto` 天生就是"**跨**私聊转投"，正是这条令要收的东西 ——
+        //   东西只允许发在群文件与（她正在说话的）私聊里，不许从一个私聊送到另一个私聊；
+        //   理由不是隐私，是**别去打扰别人**。
+        //   判据：① 说话的必须是**主人**（不是主人一律拒）；② 主人的**当前会话必须就是他自己的私聊**
+        //   （主人在群里发 fileto 也不行 —— 那同样是把东西投到群外某个人的私聊去）。
+        //   放在 op 判定之后：这一条是**落点规则**，`h.need("send.fileto")` 仍是本函数第一句、
+        //   一个字没放宽也没收紧；无人说话（控制台 / 自主 SYSTEM）那一半不由本技能收口，
+        //   由基座出口那条车道负责（这里对"没有 QQ 说话人"的情形**原样放行**，行为不变）。
+        String room = filetoRoom(h, c);
+        if (room != null) return room;
+        // <<< W15D1-A4
         String file = Str.trim(a.str("file"));
         if (file.isEmpty()) return msg(c, "缺文件", "missing_file");
         long qq = a.l("qq", 0L);
@@ -203,7 +258,16 @@ public class SendSkill implements Skill {
 
         if (!h.napcatConnected()) return Api.NOT_CONNECTED;
 
-        JsonObject r = h.napcat().sendPrivateFile(qq, file, name);
+        // 交给平台的 file 值：结构性默认 = 入参原样（这就是本文件历史上那条路，改前逐字节如此）。
+        String source = file;
+        // >>> W15D1-A1
+        // ★ 2026-09-26（W15/批 15，甲方裁决 A1）：与上面 `file` 同一缺陷、同一口径 ——
+        //   fileto 也把原样字符串交给平台，数据根相对路径同样在 NapCat 上撞 `retcode 1200 / 识别URL失败`
+        //   （真机证据与 `file` 那一段同一时刻、同一次工具调用族）。绝对路径 / URL 形态不动，
+        //   其余按 FileSkill 那一套同一个基（`h.conf().root()`）+ 同一套归一化解析；解析不了保持旧行为。
+        source = sendPath(h, file);
+        // <<< W15D1-A1
+        JsonObject r = h.napcat().sendPrivateFile(qq, source, name);
         if (!Api.ok(r)) {
             return msg(c, "发送失败", "send_fail op={op} error={error}", "{op}", "fileto", "{error}", detail(c, r));
         }
@@ -211,6 +275,144 @@ public class SendSkill implements Skill {
                 "{name}", file, "{target}", targetLabel(c, false, qq));
     }
 
+    // >>> W15D1
+
+    // ================================================================ 发文件的路径归一（结构性，不是权限）
+
+    /**
+     * <b>交给平台的 file 值（W15D1-A1）</b>：绝对路径 / URL 形态 → <b>原样返回</b>；
+     * 其余（数据根相对路径）→ 按 {@code h.conf().root()} 解析成绝对路径。
+     *
+     * <p><b>为什么必须解析</b>：同族 API 口径不一致 —— {@code file op=read/list} 认数据根相对路径
+     * （{@link sair.v4.skill.Host} 背后那份 FileSkill 的口径），而本技能的 {@code send op=file/fileto}
+     * 把原样字符串交给 NapCat，于是同一个 {@code files/gm-accept.txt} 一个通一个撞
+     * {@code retcode 1200「识别URL失败」}（2026-09-26 18:16:47 真机逐字证据，见 {@code file()} 里那段）。</p>
+     *
+     * <p><b>这里只做"相对谁"的归一，不做权限判定</b>：能不能发这个文件由 op 判定（{@code send.file} /
+     * {@code send.fileto}）与基板 File 域（{@code Host.sayFile} 内部那句 {@code localFileDeny}）说了算 ——
+     * 本方法一个字都不放宽、也不收紧它们。</p>
+     *
+     * <p><b>绝不猜</b>：拿不到数据根（{@code conf()==null} / {@code root()==null}）或路径规范化不了
+     * ⇒ 返回<b>入参原样</b>，行为与改前逐字节一致（旧那条 1200 也照旧，只是不会更糟）。</p>
+     */
+    private static String sendPath(Host h, String value) {
+        String s = Str.trim(value);
+        if (s.isEmpty()) return value;
+        // ① URL 形态（含 file:）：一个字节都不动 —— 它们不是数据根相对路径，各有各的取文件方式。
+        String low = Str.lower(s);
+        if (low.startsWith("http://") || low.startsWith("https://")
+                || low.startsWith("base64://") || low.startsWith("file:")) {
+            return value;
+        }
+        // ② 绝对路径：原样（GM 裁决：不许改写）—— 与 FileSkill.resolve 一样以 File.isAbsolute() 为准。
+        try {
+            if (new File(s).isAbsolute()) return value;
+        } catch (Throwable t) {
+            return value;
+        }
+        // ③ 其余 = 数据根相对路径：按 FileSkill 的**同一个基** + **同一套归一化**解析。
+        try {
+            File base = dataRoot(h);
+            if (base == null) return value;                 // 没有数据根：保持旧行为
+            File f = resolveUnder(base, s);
+            return f == null ? value : f.getPath();         // 解析不了：保持旧行为
+        } catch (Throwable t) {
+            return value;                                   // 出任何事都退回原样，绝不猜
+        }
+    }
+
+    /**
+     * 数据根 = {@code h.conf().root()}，与 {@code FileSkill.root(Host)} 同一个基（连 {@code real}
+     * 那一层都照抄：Windows 上 {@code getCanonicalPath()} 不解析目录联接，只做规范化会让
+     * {@code files/联接/…} 静默指到数据根外面）。拿不到返回 {@code null}。
+     */
+    private static File dataRoot(Host h) {
+        if (h == null || h.conf() == null || h.conf().root() == null) return null;
+        try {
+            File r = realFile(h.conf().root().getCanonicalFile());
+            return r == null ? h.conf().root().getCanonicalFile() : r;
+        } catch (Throwable t) {
+            return null;                                    // 拿不到就"按拿不到办"（调用方返回原样）
+        }
+    }
+
+    /**
+     * 相对 {@code base} 解析 + 两道结构性归一，与 {@code FileSkill.resolve(File, String)} <b>逐条同一套</b>
+     * （技能目录不是 classpath，引用不到那个类；基板 {@code kit.Fs} 也没有共享的路径解析口，
+     * 所以这里照抄规则而不是"另发明一套"）。
+     */
+    private static File resolveUnder(File base, String path) {
+        String p = Str.trim(path).replace('\\', '/');
+        if (p.isEmpty()) p = ".";
+        try {
+            File f = new File(p);
+            if (!f.isAbsolute()) f = new File(base, p);
+            File canon = f.getCanonicalFile();      // ① `..` 与符号链接：规范化
+            File r = realFile(canon);               // ② junction / 符号链接：解成真实位置
+            return r == null ? canon : r;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /**
+     * 真实位置：把"最深一层已存在的祖先"用 {@code toRealPath()} 解开（junction 也露出来），
+     * 再把还不存在的尾巴拼回去。失败返回 {@code null}（调用方退回规范化路径，不因此拒绝）。
+     * 与 {@code FileSkill.real(File)} 同一套（原因同上：没有共享口）。
+     */
+    private static File realFile(File f) {
+        try {
+            List<String> tail = new ArrayList<String>();
+            File cur = f;
+            while (cur != null && !cur.exists()) {
+                tail.add(cur.getName());
+                cur = cur.getParentFile();
+            }
+            if (cur == null) return f.getCanonicalFile();
+            File r = cur.toPath().toRealPath().toFile();
+            for (int i = tail.size() - 1; i >= 0; i--) r = new File(r, tail.get(i));
+            return r.getCanonicalFile();
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    // ================================================================ 落点规则（甲方 2026-09-26 新令 A4）
+    /**
+     * {@code file} 的落点检查：参数里点名的 {@code group}/{@code qq} 必须就是当前会话；
+     * 不符 ⇒ 返回拒文（调用方原样回给模型），一致 / 没给 ⇒ {@code null}（照旧往下走）。
+     *
+     * <p>文案走本技能既有那套：{@code prompt.md} 的 [文案] 表 + 结构性兜底。
+     * {@code 落点不是当前会话} 这个键 GM 还没写进 {@code prompt.md}（那份文件不在本车道手里），
+     * 所以现在走的是下面的 ASCII 兜底串；等 GM 补一行中文即自动改口。</p>
+     */
+    private static String offSession(Args a, Cfg c, boolean group, long id) {
+        long g = a.l("group", 0L);
+        long q = a.l("qq", 0L);
+        boolean wrongGroup = g > 0L && (!group || g != id);
+        boolean wrongQq = q > 0L && (group || q != id);
+        if (!wrongGroup && !wrongQq) return null;
+        return msg(c, "落点不是当前会话", "off_session want={want} now={now}",
+                "{want}", wrongGroup ? targetLabel(c, true, g) : targetLabel(c, false, q),
+                "{now}", targetLabel(c, group, id));
+    }
+
+    /**
+     * {@code fileto} 的落点检查：**只有主人的、且当前会话就是主人自己私聊**的那一次才放行；
+     * 其余有 QQ 说话人的情形一律拒（甲方 2026-09-26 新令 A4）。
+     * 没有 QQ 说话人（控制台 / 自主 SYSTEM / 钩子）⇒ {@code null}，不由本技能收口。
+     */
+    private static String filetoRoom(Host h, Cfg c) {
+        Caller me = h == null ? null : h.caller();
+        if (me == null || me.isConsole()) return null;        // 无人说话：基座出口那条车道收口
+        long master = h.conf() == null ? 0L : h.conf().masterQQ();
+        boolean own = me.kind() == Caller.Kind.MASTER && !me.toGroup() && me.qq() > 0L
+                && (master <= 0L || me.qq() == master);
+        if (own) return null;
+        return msg(c, "只发自己的私聊", "fileto_own_session_only by={by}",
+                "{by}", me.kind() + ":" + me.qq());
+    }
+    // <<< W15D1
     // ================================================================ op：record
 
     /**
@@ -243,7 +445,31 @@ public class SendSkill implements Skill {
         String risk = riskStop(h, c);
         if (risk != null) return risk;
 
-        JsonObject r = group ? h.napcat().sendGroupRecord(id, file) : h.napcat().sendPrivateRecord(id, file);
+        // ★ 2026-09-24（批 10 ⑤）：语音走的是<b>同一个内层平台动作</b> `send_group_msg`（只是消息段是
+        //   record）⇒ 与表情包同一缺陷、同一改法：技能 op（上面那一判 `send.record`）仍是唯一授权闸门，
+        //   内层动作改按 SYSTEM（她本人恒全权）判。落点不是当前会话时本口返回 null ⇒ 按改前那条路原样发。
+        // 交给平台的 file 值：结构性默认 = 入参原样（改前那条路，逐字节如此）。
+        String source = file;
+        // >>> W15D1-A1b
+        // ★ 2026-09-26（W15/批 15 部署后真机验收，23:54，群 121873503，favor 750 的合成身份）：
+        //   **A1 漏了 `record` 这一支** —— 同一份 `files/gm-accept.txt`，`send op=file` 已经成功
+        //   （她回「发出去了喔，gm-accept.txt 已经落到群里」），可 `send op=record` 还是把原样相对串
+        //   交给了平台，真机逐字回执：
+        //   `[NapCat] 动作 can_send_record → ok` 之后
+        //   `[NapCat] 动作 send_group_msg → {"status":"failed","retcode":1200,"message":"文件处理失败: 识别URL失败, uri= files/gm-accept.txt"}`。
+        //   判据与 A1 完全同源：相对路径按数据根解析（**复用同一个 `sendPath` / `resolveUnder`**，
+        //   不写第二套规则）；绝对路径 / `http(s)://` / `base64://` / `file:` 逐字节透传；
+        //   拿不到基或解析不了 ⇒ 原样（行为与改前逐字节一致）。判定顺序与回执文案一字不动
+        //   （`h.need("send.record")` 仍是本函数第一句，失败仍走 `语音失败` 那条模板）。
+        source = sendPath(h, file);
+        // <<< W15D1-A1b
+        JsonObject r = h.sayMedia(group, id, "record", source);
+        if (r == null) {
+            r = group ? h.napcat().sendGroupRecord(id, source) : h.napcat().sendPrivateRecord(id, source);
+            log(h, "say record via=old ok=" + (Api.ok(r) ? 1 : 0)
+                    + " target=" + targetLabel(c, group, id)
+                    + (Api.ok(r) ? "" : " error=" + detail(c, r)));
+        }
         if (!Api.ok(r)) {
             // 失败必须诚实且可诊断：把平台原始 retcode/status/message 原样带回去，并且明说"语音没发出去"
             return msg(c, "语音失败", "record_failed error={error}", "{error}", detail(c, r));

@@ -17,6 +17,7 @@ import javax.imageio.ImageIO;
 
 import sair.v4.auth.Caller;
 import sair.v4.kit.Fs;
+import sair.v4.kit.Out;
 import sair.v4.kit.Str;
 import sair.v4.qq.Api;
 import sair.v4.skill.Args;
@@ -77,7 +78,10 @@ public class SendImageSkill implements Skill {
         List<String> bad = new ArrayList<String>();
 
         if (!image.isEmpty()) {
-            JsonObject r = group ? h.napcat().sendGroupImage(id, image) : h.napcat().sendPrivateImage(id, image);
+            // ★ 2026-09-24（批 10 头号修复）：她自发发出去的图走基板的"以她自己身份发媒体"出口 ——
+            //   技能 op（上面那一判 `sendimage`）仍是唯一授权闸门，本口只把内层平台动作
+            //   `napcat.send_group_msg` 改按 SYSTEM（她本人恒全权）判；本地路径照旧过外链中转改写层。
+            JsonObject r = sent(h, group, id, image);
             if (Api.ok(r)) done.add("图片 " + Str.cut(image, 80));
             else bad.add("图片发送失败：" + err(r));
         }
@@ -86,9 +90,8 @@ public class SendImageSkill implements Skill {
             if (png == null) {
                 bad.add("文字渲染成图片失败（Java2D 或磁盘不可用）");
             } else {
-                JsonObject r = group
-                        ? h.napcat().sendGroupImage(id, png.getAbsolutePath())
-                        : h.napcat().sendPrivateImage(id, png.getAbsolutePath());
+                String p = png.getAbsolutePath();
+                JsonObject r = sent(h, group, id, p);
                 if (Api.ok(r)) done.add("文字图 " + png.getName() + "（" + png.length() + " 字节）");
                 else bad.add("文字图发送失败：" + err(r));
             }
@@ -99,6 +102,32 @@ public class SendImageSkill implements Skill {
         sb.append(done.isEmpty() ? "：" : "：成功 " + join(done, "、"));
         if (!bad.isEmpty()) sb.append(done.isEmpty() ? "" : "；").append(join(bad, "；"));
         return sb.toString();
+    }
+
+    // ---------------------------------------------------------------- 发送
+
+    /**
+     * 发一张图（<b>以她自己的身份</b>）：优先走基板的新出口 {@link Host#sayMedia}；它返回 {@code null}
+     * （老宿主 / 本口不承接）时按<b>改前那条路</b>（{@code h.napcat()}）原样发 —— 行为逐字一致，
+     * 并打同一形状的回退事实行（{@code via=old}）。
+     */
+    private static JsonObject sent(Host h, boolean group, long id, String file) {
+        JsonObject r = h.sayMedia(group, id, "image", file);
+        if (r != null) return r;
+        r = group ? h.napcat().sendGroupImage(id, file) : h.napcat().sendPrivateImage(id, file);
+        log(h, "say image via=old ok=" + (Api.ok(r) ? 1 : 0)
+                + " target=" + (group ? "group:" : "qq:") + id
+                + (Api.ok(r) ? "" : " error=" + err(r)));
+        return r;
+    }
+
+    /** 过程事实行（走 {@code Host.out()} ⇒ {@code logConsole} 的 {@code skill} 类别；出厂默认不打）。 */
+    private static void log(Host h, String msg) {
+        try {
+            Out o = h == null ? null : h.out();
+            if (o != null) o.dim("[发图片] " + msg);
+        } catch (Throwable ignored) {
+        }
     }
 
     // ---------------------------------------------------------------- 渲染

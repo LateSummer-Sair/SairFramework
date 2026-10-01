@@ -420,7 +420,10 @@ public final class EmotionState {
     /** 哪一天（{@code yyyyMMdd}；"每天首次交流"的口径）。 */
     public static int ymd(long ms) {
         Calendar c = Calendar.getInstance();
-        c.setTimeInMillis(ms <= 0L ? System.currentTimeMillis() : ms);
+       // ★ 批 15 / 2026-09-26：ms<=0 的兜底 = 唯一接缝（默认 = 真实墙上时钟）。注意上一行的
+       //   Calendar.getInstance() 抓到的那个瞬间马上被 setTimeInMillis 覆盖 ⇒ 本方法**唯一**
+       //   读"现在"的地方就是这一句（口径与状态机一致："哪一天"也按接缝算）。
+        c.setTimeInMillis(ms <= 0L ? EmotionMood.nowMs() : ms);
         return c.get(Calendar.YEAR) * 10000 + (c.get(Calendar.MONTH) + 1) * 100 + c.get(Calendar.DAY_OF_MONTH);
     }
 }

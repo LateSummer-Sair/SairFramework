@@ -54,6 +54,12 @@
       // 获取实现版本信息
       // 图片文字识别
       ["napcat._get_group_notice", "napcat.can_send_image", "napcat.can_send_record", "napcat.get_forward_msg", "napcat.get_friend_list", "napcat.get_friend_msg_history", "napcat.get_group_at_all_remain", "napcat.get_group_info", "napcat.get_group_list", "napcat.get_group_member_info", "napcat.get_group_member_list", "napcat.get_group_msg_history", "napcat.get_image", "napcat.get_login_info", "napcat.get_msg", "napcat.get_recent_contact", "napcat.get_record", "napcat.get_status", "napcat.get_stranger_info", "napcat.get_version_info", "napcat.ocr_image"]: ["ALLUSER"],
+      // ── NapCat 4.18 读类：群管理边缘能力的**内层动作**（2026-09-24 GM 裁定补登记）
+      // 今日群打卡名单（群管理技能 group.signedlist 的内层动作）
+      // 群分享链接（群管理技能 group.sharelink 的内层动作）
+      // 为什么必须补：技能层已把这两条给 ALLUSER，而**真正生效的那道是这里**（看 群管理\perms.jsonc 里那句
+      // 原话）⇒ 不补的话事实块告诉她"能用"，她一调就被判未授权（= 描述与权限表不一致）。
+      ["napcat.get_group_signed_list", "napcat.get_group_share_link"]: ["ALLUSER"],
       // ── 一、好感度（perm）
       // 查一个人的好感度
       // 好感度榜单

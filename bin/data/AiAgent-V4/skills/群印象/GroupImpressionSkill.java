@@ -65,11 +65,14 @@ import sair.v4.store.Store;
  *       （{@code grouplog} 里不带 @ 信息），以及"这个群刚才动了一下"。</li>
  * </ol>
  *
- * <h3>★ 她自己的标记行（P1-selfsee）：读 grouplog 的每个读点先过一道判据</h3>
+ * <h3>★ 她自己的标记行（P1-selfsee）+ 外部来源行（能力②/D1）：读 grouplog 的每个读点先过一道判据</h3>
  * <p>基板 P0-1 之后 {@code grouplog} 里会多出她<b>自己发出去</b>的那一行「标记行」
  * （{@code content} 形如 {@code [我发的 图片 msg_id=<id>]} / {@code [我发的 msg_id=<id>] <正文>}，
  * {@code extra.self=true}）。它是<b>机器写的标记行 —— 不是群友发言，也不是她的人格素材</b>。
- * 本插件两个读点分开处置（判据只有 {@link #isSelfMark} 一处）：</p>
+ * 基板 D1（2026-09-28）之后同一个 {@code selfId} 下<b>另一个机器人服务</b>发出去的消息
+ * （{@code extra.foreign=true}）也会出现在 {@code grouplog} 里 —— 它<b>同样</b>不是群友发言，
+ * 处置逐字相同（两个判据的合流处 = {@link #notMemberWords}）。
+ * 本插件两个读点分开处置：</p>
  * <ol>
  *   <li>{@link #scan}（取样行 ⇒ 负面/正面词计分、成员去重、话题 2-gram、{@code extra.sampled}）：
  *       <b>① 整行跳过</b> —— 机器外壳不进任何「群氛围素材」，也不参与计分；</li>
@@ -149,6 +152,29 @@ public class GroupImpressionSkill implements Skill, Hooked, ContextProvider {
         }
     }
 
+    /**
+     * ★ <b>外部来源行</b>判据（能力②，D1 2026-09-28）：同一个 QQ 账号下<b>另一个机器人服务</b>
+     * 发出去的消息（{@code extra.foreign=true}，基板 {@code QqGateway.foreignEcho} 的唯一产法）。
+     *
+     * <p>它在本技能里的处置与标记行<b>逐字相同</b>：不是群友发言 ⇒ 不进任何统计素材
+     * （取样行、成员去重、话题 2-gram 都吃 {@link #withoutSelfMarks} 那一支）。
+     * 判据只看 {@code extra.foreign}（内容伪造不出这个键）。</p>
+     */
+    static boolean isForeign(JsonObject row) {
+        if (row == null) return false;
+        try {
+            JsonObject ex = rowExtra(row);
+            return ex != null && J.b(ex, "foreign", false);
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    /** 这一行是不是"<b>不是群友的话</b>"（两个判据的唯一合流处：她的标记行 / 外部来源行）。 */
+    static boolean notMemberWords(JsonObject row) {
+        return isSelfMark(row) || isForeign(row);
+    }
+
     /** {@code extra} 列（TEXT 的 JSON 串，或已被 {@code Db.decode} 解析成对象）；解析不出来返回 null。 */
     private static JsonObject rowExtra(JsonObject row) {
         try {
@@ -162,14 +188,14 @@ public class GroupImpressionSkill implements Skill, Hooked, ContextProvider {
     }
 
     /**
-     * 去掉标记行（{@link #isSelfMark}）。
-     * <p>一个标记行都没有时<b>原样返回入参</b>（同一引用、同一顺序）—— 这就是「没有标记行 ⇒ 与改动前逐字等价」。</p>
+     * 去掉"不是群友的话"的行（{@link #notMemberWords}：她的标记行 + 外部来源行）。
+     * <p>一个都不命中时原样返回入参（同一引用、同一顺序）—— 这就是「没有这类行 ⇒ 与改动前逐字等价」。</p>
      */
     static List<JsonObject> withoutSelfMarks(List<JsonObject> rows) {
         if (rows == null || rows.isEmpty()) return rows;
         boolean has = false;
         for (int i = 0; i < rows.size(); i++) {
-            if (isSelfMark(rows.get(i))) {
+            if (notMemberWords(rows.get(i))) {
                 has = true;
                 break;
             }
@@ -178,7 +204,7 @@ public class GroupImpressionSkill implements Skill, Hooked, ContextProvider {
         List<JsonObject> out = new ArrayList<JsonObject>();
         for (int i = 0; i < rows.size(); i++) {
             JsonObject r = rows.get(i);
-            if (!isSelfMark(r)) out.add(r);
+            if (!notMemberWords(r)) out.add(r);
         }
         return out;
     }
@@ -685,7 +711,7 @@ public class GroupImpressionSkill implements Skill, Hooked, ContextProvider {
      */
     private static Stat scan(List<JsonObject> rows, Cfg c) {
         Stat st = new Stat();
-        rows = withoutSelfMarks(rows);           // ★ P1-selfsee：标记行不进任何统计
+        rows = withoutSelfMarks(rows);           // ★ P1+能力②：标记行 / 外部来源行都不进任何统计
         if (rows == null) return st;
         for (int i = 0; i < rows.size(); i++) {
             JsonObject r = rows.get(i);

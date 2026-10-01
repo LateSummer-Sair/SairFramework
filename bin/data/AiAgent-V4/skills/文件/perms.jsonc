@@ -5,19 +5,20 @@
   // ───────── 技能：谁能用哪些 op ─────────
   "Skill": {
     // ── 谁能用（没列到 = 未授权）
-    "Run": {
-      // ── 看文件、找文件、把网上的东西下到 fil（file）
-      // 读文本文件
-      ["file.read"]: ["ALLUSER"]
-    },
+    "Run": {},
     // ── 谁不能用（压过 Run）
     "Ban": {
       // ── 看文件、找文件、把网上的东西下到 fil（file）
+      // 读文本文件 ★ 2026-09-26 GM 裁定：从 Run **收进 Ban**。
+      //   理由：甲方令"好感度 ≥500 才放权本地文件读取" —— 原先给 ALLUSER Run 会让那道
+      //   好感度闸**根本不被问**（ACL 先放行）⇒ "档位才是钥匙"名不副实；
+      //   且 `files\` 下有诊断导出（对话/库 dump），不该对任何低好感的人可读。
+      //   收进来之后：favor≥500 由 FavorGate 放行（走平行闸），其余一律拒。
       // 下载 http/https 到 files/
       // 按关键词找文件
       // 列目录
       // 写文件
-      ["file.download", "file.find", "file.list", "file.write"]: ["ALLUSER"]
+      ["file.read", "file.download", "file.find", "file.list", "file.write"]: ["ALLUSER"]
     }
   }
 }
