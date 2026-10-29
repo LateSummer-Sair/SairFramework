@@ -188,6 +188,8 @@
       // 合并全文索引段
       // 回收空闲页
       ["store_admin.export", "store_admin.import", "store_admin.maintain", "store_admin.optimize", "store_admin.vacuum"]: ["ALLUSER"]
+      ["follow"]: ["ALLUSER"],
+      ["plan"]: ["ALLUSER"],
     }
   },
 

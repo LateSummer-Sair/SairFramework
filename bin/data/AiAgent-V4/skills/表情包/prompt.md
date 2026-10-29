@@ -154,7 +154,7 @@ QQ 侧已有: QQ 侧已经有同一张了（sticker_cf_exists_remote md5={md5}�
 #           手工 collect 不受影响。
 # 发图心情匹配：on（默认）时，send 没给 scene 就先按"当前心情与现状"匹配索引内容
 #           （情绪事实读的是「情绪」技能写的 emotion 表：last_emotion + 怒/悲/亲疏/关系），
-#           匹配不到则**随机**（照 V3 的发图机制）。off = 回到今天的老口径（最常用 / 挑选方式: 随机）。
+#           匹配不到则**随机**（照 V3 的发图机制）。off = 回到今天的老口径（最常用 / 挑选方式: 最常用）。
 # 本机图外发：★发图侧的硬规则（甲方 2026-09-16）。NapCat 可能在**另一台机器**上，读不到本机路径。
 #           中转（默认）：本地件只在**外链中转就绪**时才交给 NapCat（基板 Api.rewriteLocalFile 会把它
 #             换成 http://<relayPublicHost>:<port>/<token>/<绝对路径>）；中转没就绪 ⇒ 改用 extra.url；

@@ -7,7 +7,9 @@ import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import sair.v4.auth.Caller;
 import sair.v4.kit.Http;
+import sair.v4.kit.J;
 import sair.v4.kit.Str;
 import sair.v4.skill.Args;
 import sair.v4.skill.Host;
@@ -34,7 +36,8 @@ public class SearchSkill implements Skill {
 
     @Override
     public void declareOps(sair.v4.auth.OpList ops) {
-        ops.add("search", "", "必应联网搜索");
+        ops.add("search", "", "联网搜索（默认按调用者自动选后端）");
+        ops.add("search", "ds", "DeepSeek 官方 Search 接口（结构化结果，按成功请求计费）");
     }
 
     @Override
@@ -48,8 +51,41 @@ public class SearchSkill implements Skill {
         if (q.isEmpty()) return a.missing("query");
         int n = a.i("count", 5);
         if (n <= 0) n = 5;
-        if (n > 10) n = 10;
 
+        // ★ 后端选择：主人与她本人走 DeepSeek 官方 Search（更强，但按成功请求计费）；
+        //   其他身份留在必应（免费），避免群里的搜索把主人的额度烧掉。
+        String via = Str.lower(Str.trim(a.str("via", "auto")));
+        if (via.isEmpty()) via = "auto";
+        Caller who = h == null ? null : h.caller();
+        boolean mine = who != null && (who.master() || who.system());
+        boolean wantDs = "ds".equals(via) || "deepseek".equals(via) || ("auto".equals(via) && mine);
+        if (wantDs) {
+            if (!"bing".equals(via)) {
+                String d2 = h == null ? null : h.need("search.ds");
+                if (d2 != null) return d2;
+                String dsErr = null;
+                String ds = dsSearch(h, q, Math.min(n, 20), a);
+                if (ds != null && !ds.startsWith("!")) return ds;
+                dsErr = ds == null ? "空响应" : ds.substring(1);
+                if ("ds".equals(via) || "deepseek".equals(via)) {
+                    return "[search] DeepSeek 搜索失败：" + dsErr + "（可加 via=bing 改用必应）";
+                }
+                // via=auto 且官方接口失败 ⇒ 安静退回必应，但把原因写进结果头
+                String fallback = bing(h, q, n);
+                return "[search] （DeepSeek 官方接口不可用：" + dsErr + "，已退回必应）\n" + fallback;
+            }
+        }
+
+        return bing(h, q, n);
+    }
+
+    /**
+     * 必应后端（免费；原逻辑原样搬进来，行为不变）。
+     *
+     * <p>留着的价值：官方接口不可用（无 key / 402 余额 / 429 限流 / 断网）时还能搜；
+     * 以及非主人身份走这条，不花主人的钱。</p>
+     */
+    private static String bing(Host h, String q, int n) {
         String url = "https://www.bing.com/search?q=" + enc(q) + "&setlang=zh-CN&ensearch=0";
         Map<String, String> hdrs = Http.headers();
         hdrs.put("User-Agent", UA);
@@ -81,6 +117,94 @@ public class SearchSkill implements Skill {
             sb.append(i + 1).append(". ").append(Str.nz(t[0])).append("\n");
             sb.append("   ").append(Str.nz(t[1])).append("\n");
             if (Str.has(t[2])) sb.append("   ").append(t[2]).append("\n");
+        }
+        return sb.toString().trim();
+    }
+
+
+    // ---------------------------------------------------------------- DeepSeek 官方 Search
+
+    static final String DS_BASE = "https://api.deepseek.com";
+
+    /** 取 API Key（走基板配置；不打印、不落盘）。 */
+    private static String apiKey(Host h) {
+        try {
+            if (h == null || h.conf() == null) return "";
+            String k = h.conf().get("apiKey", "");
+            return k == null ? "" : Str.trim(k);
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    /**
+     * DeepSeek 官方 Search（{@code POST /v1/tools/search}）。
+     *
+     * <p>比抓必应结果页强的地方：结构化字段（rerank_score / summary / date / authority）、
+     * <b>支持搜索语法</b>（{@code site:} / {@code -site:} / {@code "精确短语"} / {@code lang:} / {@code after:} / {@code before:}），
+     * 还可以 {@code need_content=true} 直接带回正文。</p>
+     *
+     * @return 成功 = 可直接回给模型的正文；失败 = 以 {@code !} 开头的原因（调用方据此决定是否退回必应）
+     */
+    private static String dsSearch(Host h, String q, int n, Args a) {
+        String key = apiKey(h);
+        if (key.isEmpty()) return "!配置里没有 apiKey";
+        JsonObject body = new JsonObject();
+        body.addProperty("query", q);
+        body.addProperty("count", n);
+        String oq = Str.trim(a.str("ori_question", ""));
+        if (Str.has(oq)) body.addProperty("ori_question", oq);
+        body.addProperty("need_content", a.b("need_content", false));
+        java.util.Map<String, String> hdrs = Http.headers();
+        hdrs.put("Authorization", "Bearer " + key);
+        hdrs.put("Content-Type", "application/json");
+        hdrs.put("Accept", "application/json");
+        Http.Res r = Http.postJson(DS_BASE + "/v1/tools/search", body.toString(), hdrs, 30000);
+        if (r == null) return "!空响应";
+        if (r.code == 0) return "!" + (Str.has(r.error) ? r.error : "没有连上");
+        String raw = r.body == null ? "" : r.body;
+        if (r.code != 200) {
+            String msg = raw;
+            JsonObject eo = J.obj(raw);
+            if (eo != null && eo.has("error")) {
+                JsonObject e = J.obj(eo.get("error").toString());
+                if (e != null) msg = J.s(e, "message", raw);
+            }
+            String hint = r.code == 401 ? "（key 无效）" : r.code == 402 ? "（余额不足）"
+                    : r.code == 429 ? "（限流，稍等再试）" : (r.code >= 500 ? "（服务端错误，稍等再试）" : "");
+            return "!HTTP " + r.code + hint + " " + Str.cut(Str.oneLine(msg), 200);
+        }
+        JsonObject o = J.obj(raw);
+        if (o == null) return "!响应不可解析";
+        com.google.gson.JsonArray arr = o.has("results") ? J.arr(o.get("results").toString()) : null;
+        if (arr == null) return "!响应里没有 results";
+        int total = arr.size();
+        if (total == 0) return "[search] DeepSeek 搜索 \"" + q + "\"：没有匹配结果（换个说法或去掉限定词再试）";
+        StringBuilder sb = new StringBuilder();
+        sb.append("DeepSeek 搜索 \"").append(q).append("\"：").append(total).append(" 条").append("\n");
+        int show = Math.min(total, n);
+        boolean withContent = a.b("need_content", false);
+        for (int i = 0; i < show; i++) {
+            JsonObject it = J.obj(arr.get(i).toString());
+            if (it == null) continue;
+            sb.append(i + 1).append(". ").append(Str.nz(J.s(it, "title", ""))).append("\n");
+            String u = J.s(it, "url", "");
+            if (Str.has(u)) sb.append("   ").append(u).append("\n");
+            String sum = J.s(it, "summary", "");
+            if (!Str.has(sum)) sum = J.s(it, "snippet", "");
+            if (Str.has(sum)) sb.append("   ").append(sum).append("\n");
+            StringBuilder meta = new StringBuilder();
+            String date = J.s(it, "date", "");
+            if (Str.has(date)) meta.append("时间=").append(date.length() >= 10 ? date.substring(0, 10) : date);
+            String site = J.s(it, "site_name", "");
+            if (Str.has(site)) meta.append(meta.length() > 0 ? " · " : "").append("站点=").append(site);
+            meta.append(meta.length() > 0 ? " · " : "").append("权威=").append(J.i(it, "authority", -1));
+            meta.append(" · 相关=").append(J.d(it, "rerank_score", 0.0D));
+            sb.append("   ").append(meta).append("\n");
+            if (withContent) {
+                String c = J.s(it, "content", "");
+                if (Str.has(c)) sb.append("   正文：").append(Str.cut(Str.oneLine(c), 1200)).append("\n");
+            }
         }
         return sb.toString().trim();
     }

@@ -23,3 +23,7 @@
 结果头: GET {url}（HTTP {code}，{bytes} 字符，编码 {charset}）
 # 截断尾巴：正文超过 max 时接在后面的说明。{total} 是截断前的字符数。
 截断尾巴: \n…（已截断，原始 {total} 字符）
+
+# 浏览器可执行文件（op=dom / op=shot / op=look 用）。Windows 上不写会自动找 Edge；
+# Linux/macOS 没有 Edge，请在这里写真实路径（或调用时传 browser=）。
+# 浏览器: /usr/bin/chromium

@@ -9,18 +9,15 @@
     // ── 谁不能用（压过 Run）
     "Ban": {
       // ── 往外发东西的唯一出口（send）
-      // 发语音 ★ 2026-09-24 GM 裁定收窄（原本给 ALLUSER Run）：本 op 的 file 由**调用方给**，
-      //   而批 10 的 Host.sayMedia 出口把主体换成她本人（SYSTEM）⇒ 那一跳里 **File 域判定也一起放宽**，
-      //   后果经独立复核实测：普通群友能让机器人把**本机任意可读文件**（例 C:\Windows\win.ini）变成
-      //   中转 URL 交给 NapCat。收窄这一条就关掉这条外延；主人回合照旧能发语音。
       // 发文件到当前会话
       // 发文件给指定的人
       // 把历史消息转述出来再发
       // 群发一条
       // 私聊发一句
       // 撤回她自己发的消息
+      // 发语音
       // 转告一句话给某人
-      ["send.file", "send.fileto", "send.forward", "send.group", "send.private", "send.recall", "send.relay", "send.record"]: ["ALLUSER"]
+      ["send.file", "send.fileto", "send.forward", "send.group", "send.private", "send.recall", "send.record", "send.relay"]: ["ALLUSER"]
     }
   }
 }

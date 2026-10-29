@@ -1,4 +1,8 @@
+import java.io.ByteArrayOutputStream;
+import com.google.gson.JsonObject;
+
 import java.io.File;
+import java.io.InputStream;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -7,9 +11,14 @@ import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 
 import sair.v4.kit.Fs;
 import sair.v4.kit.Http;
+import sair.v4.kit.J;
 import sair.v4.kit.Out;
 import sair.v4.kit.Str;
 import sair.v4.skill.Args;
@@ -41,7 +50,7 @@ public class FileSkill implements Skill {
 
     private static final String TOOL = "file";
     private static final String NAME = "文件";
-    private static final String OPS = "read / list / find / download / write";
+    private static final String OPS = "read / list / find / download / write / fetch";
 
     /**
      * 声明本技能的五个 op（技能管控表就是按这些名字放行或封禁的）。
@@ -53,6 +62,7 @@ public class FileSkill implements Skill {
         ops.add("file", "find", "按关键词找文件");
         ops.add("file", "download", "下载 http/https 到 files/");
         ops.add("file", "write", "写文件");
+        ops.add("file", "fetch", "取回对方刚发在 QQ 里的文件");
     }
 
     @Override
@@ -69,6 +79,7 @@ public class FileSkill implements Skill {
             if ("find".equals(op)) return find(a, h, c, root);
             if ("download".equals(op)) return download(a, h, c, root);
             if ("write".equals(op)) return write(a, h, c, root);
+            if ("fetch".equals(op)) return fetch(a, h, c, root);
             return c.t("不支持op", "op", op, "ops", OPS);
         } catch (Throwable t) {
             log(h, "op=" + op + " 异常: " + t);
@@ -104,6 +115,17 @@ public class FileSkill implements Skill {
         if (!f.isFile()) return c.t("不是普通文件", "path", rel(root, f));
 
         long size = f.length();
+        // >>> DOCPARSE：文档分支（PDF / Office）。必须在通用「最大读取字节」闸之前 ——
+        //     那一道是给纯文本用的（几 MB 足够），而一份正常 PDF/PPT 经常比它大得多。
+        //     这里按扩展名分派：PDF 走 pdftotext（零新依赖，poppler 随 Git for Windows 自带）；
+        //     docx/xlsx/pptx 是 ZIP+XML，用 JDK 自带的 java.util.zip 解，不需要 PDFBox/POI。
+        String ext = extOf(f.getName());
+        if (DOC_EXTS.contains(ext)) {
+            String d = docRead(a, h, c, root, f, ext, size);
+            if (d != null) return d;
+        }
+        // <<< DOCPARSE
+
         long maxRead = c.n("最大读取字节");
         if (maxRead <= 0) return c.miss("最大读取字节");
         if (size > maxRead) return c.t("太大", "size", size, "limit", maxRead);
@@ -521,6 +543,426 @@ public class FileSkill implements Skill {
     }
 
     // ---------------------------------------------------------------- prompt.md
+
+    // ---------------------------------------------------------------- 文档解析（PDF / Office）
+
+    /** 走文档分支的扩展名。旧版 doc/xls/ppt 是 OLE2 二进制，单独给一句人话。 */
+    static final java.util.Set<String> DOC_EXTS = new java.util.HashSet<String>(java.util.Arrays.asList(
+            "pdf", "docx", "xlsx", "xlsm", "pptx", "doc", "xls", "ppt"));
+
+    static String extOf(String name) {
+        if (name == null) return "";
+        int i = name.lastIndexOf('.');
+        return i < 0 ? "" : name.substring(i + 1).toLowerCase();
+    }
+
+    // ---------------------------------------------------------------- fetch（取回对方刚发的文件）
+
+    /**
+     * 取回入站文件：从基板的入站登记簿定位文件段 → 换成可下载地址 → <b>复用 download</b> 落进 files/。
+     *
+     * <p>为什么要分两步：图片段自带直链，而 {@code file} 段一般只有一个 {@code file} 值，
+     * 内容要拿它去换（{@code get_file}）。换地址这条路基板已经封装在
+     * {@code Api.refreshImageUrlQuiet}（rkey → get_image → get_file → get_msg 四级降级，全程吞错），
+     * 技能不自己发 NapCat 动作，也不自己判 SSRF —— 下载那一步仍走 download 的 NetGuard 闸门。</p>
+     */
+    private static String fetch(Args a, Host h, Cfg c, File root) {
+        String deny = h.need("file.fetch");
+        if (deny != null) return deny;
+        long keep = c.n("取文件保留条数");
+        if (keep <= 0) return c.miss("取文件保留条数");
+        List<JsonObject> list = null;
+        try {
+            list = h.inboundFiles((int) keep);
+        } catch (Throwable ignored) {
+        }
+        if (list == null || list.isEmpty()) return c.t("取文件无", "count", 0);
+
+        String want = Str.trim(a.str("name"));
+        JsonObject pick = matchFile(list, want);
+        if (pick == null) {
+            StringBuilder names = new StringBuilder();
+            for (int i = 0; i < list.size() && i < 8; i++) {
+                String nm = Str.trim(J.s(list.get(i), "name", ""));
+                if (nm.isEmpty()) nm = Str.trim(J.s(list.get(i), "file", ""));
+                if (nm.isEmpty()) continue;
+                if (names.length() > 0) names.append("、");
+                names.append(Str.cut(nm, 40));
+            }
+            return c.t("取文件没匹配", "want", Str.cut(Str.nz(want), 80), "names", names.toString());
+        }
+
+        String file = Str.trim(J.s(pick, "file", ""));
+        String name = Str.trim(J.s(pick, "name", ""));
+        String url = "";
+        try {
+            sair.v4.qq.Api api = h.napcat();
+            if (api != null) url = api.refreshImageUrlQuiet("", file, 0L);
+        } catch (Throwable ignored) {
+        }
+        if (!Str.has(url)) {
+            return c.t("取文件无地址", "name", Str.cut(Str.nz(name), 80), "file", Str.cut(Str.nz(file), 80));
+        }
+
+        String stamp = new java.text.SimpleDateFormat("HHmmss").format(new java.util.Date());
+        String safe = safeName(name.isEmpty() ? file : name, "recv-" + stamp + ".bin");
+        JsonObject q = new JsonObject();
+        q.addProperty("url", url);
+        q.addProperty("path", safe);
+        String got = download(new Args("file", q), h, c, root);
+
+        // 文档顺手解析一次（省一轮调用）：只对 pdf/docx/xlsx/pptx 生效，parse=0 可关
+        try {
+            File dir2 = filesDir(h, c);
+            File landed = dir2 == null ? null : new File(dir2, safe);
+            if (landed != null && landed.isFile() && landed.length() > 0
+                    && !"0".equals(Str.trim(a.str("parse")))) {
+                String ext = extOf(landed.getName());
+                if (DOC_EXTS.contains(ext)) {
+                    String body = docRead(a, h, c, root, landed, ext, landed.length());
+                    if (body != null) got = got + "\n\n" + body;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return got;
+    }
+
+    /**
+     * 在入站文件里挑一个（纯函数，探针可反射测）：空的 {@code want} = 取最新那条；
+     * 否则按「名字全等 → 名字包含 → file 值全等 → file 值包含」依次匹配。
+     */
+    static JsonObject matchFile(List<JsonObject> list, String want) {
+        if (list == null || list.isEmpty()) return null;
+        String w = Str.trim(want);
+        if (w.isEmpty()) return list.get(0);
+        String lw = Str.lower(w);
+        for (JsonObject o : list) if (lw.equals(Str.lower(Str.trim(J.s(o, "name", ""))))) return o;
+        for (JsonObject o : list) if (Str.lower(Str.trim(J.s(o, "name", ""))).contains(lw)) return o;
+        for (JsonObject o : list) if (lw.equals(Str.lower(Str.trim(J.s(o, "file", ""))))) return o;
+        for (JsonObject o : list) if (Str.lower(Str.trim(J.s(o, "file", ""))).contains(lw)) return o;
+        return null;
+    }
+
+    /** 把入站里的显示名洗成能安全落盘的裸文件名（去目录、替换 Windows 非法字符）。 */
+    static String safeName(String name, String fallback) {
+        String n = Str.trim(name);
+        int i = Math.max(n.lastIndexOf('/'), n.lastIndexOf('\\'));
+        if (i >= 0) n = n.substring(i + 1);
+        n = n.replaceAll("[\\\\/:*?\"<>|\\r\\n\\t]", "_");
+        n = n.trim();
+        if (n.isEmpty() || ".".equals(n) || "..".equals(n)) n = fallback;
+        if (n.length() > 120) {
+            String ext = extOf(n);
+            String keepExt = ext.isEmpty() ? "" : ("." + ext);
+            n = n.substring(0, Math.min(120 - keepExt.length(), n.length())) + keepExt;
+        }
+        return n;
+    }
+    /**
+     * 文档读取（PDF / Office）：成功返回给模型的正文；返回 null = 不归我管。
+     *
+     * <p>零新依赖的做法：PDF 交给 {@code pdftotext}（poppler，随 Git for Windows 自带，参数数组启动、不过 shell）；
+     * docx/xlsx/pptx 本质是 ZIP+XML，用 JDK 自带的 {@link ZipFile} 解开按标签取文本 —— 不需要 PDFBox/POI。</p>
+     */
+    static String docRead(Args a, Host h, Cfg c, File root, File f, String ext, long size) {
+        long docMax = c.n("文档最大字节");
+        if (docMax <= 0) return c.miss("文档最大字节");
+        if (size > docMax) return c.t("文档太大", "path", rel(root, f), "size", size, "limit", docMax);
+        long dcap = c.n("文档最长字符");
+        if (dcap <= 0) return c.miss("文档最长字符");
+        int want = a.i("max", 0);
+        if (want <= 0) want = (int) Math.min(8000L, dcap);
+        if (want > dcap) want = (int) dcap;
+
+        if ("doc".equals(ext) || "xls".equals(ext) || "ppt".equals(ext)) {
+            return c.t("旧版office", "path", rel(root, f), "ext", ext);
+        }
+
+        String body = null;
+        int pages = 0;
+        try {
+            if ("pdf".equals(ext)) {
+                String tool = Str.trim(Str.nz(c.s("pdftotext")));
+                if (tool.isEmpty()) return c.miss("pdftotext");
+                PdfOut po = pdfText(f, tool, a.i("from", 0), a.i("to", 0), 120000L);
+                if (po == null) return c.t("pdf工具缺失", "tool", tool);
+                body = po.text;
+                pages = po.pages;
+                if (!Str.has(Str.trim(body))) {
+                    // 抽不出东西时把 pdftotext 的口径带出来（退出码 / stderr），否则无从排障
+                    String why = po.code == 0 ? "" : ("，exit=" + po.code);
+                    if (Str.has(po.err)) why = why + "，" + po.err;
+                    return c.t("pdf无文字层", "path", rel(root, f), "pages", pages, "why", why);
+                }
+            } else if ("docx".equals(ext)) {
+                body = docxText(f);
+            } else if ("xlsx".equals(ext) || "xlsm".equals(ext)) {
+                body = xlsxText(f);
+            } else if ("pptx".equals(ext)) {
+                body = pptxText(f);
+            }
+        } catch (Throwable t) {
+            return c.t("文档解析失败", "path", rel(root, f), "error", String.valueOf(t));
+        }
+        if (body == null) return c.t("文档类型不支持", "path", rel(root, f), "ext", ext);
+        body = tidy(body);
+        if (body.isEmpty()) return c.t("文档空", "path", rel(root, f));
+        String pageInfo = pages > 0 ? ("，共 " + pages + " 页") : "";
+        String head = c.t("文档读头", "path", rel(root, f), "type", ext, "chars", body.length(), "pages", pageInfo);
+        if (body.length() > want) {
+            return head + "\n" + body.substring(0, want) + "\n"
+                    + c.t("文档截断", "rest", body.length() - want, "total", body.length());
+        }
+        return head + "\n" + body;
+    }
+
+    static final class PdfOut {
+        String text = "";
+        int pages;
+        String err = "";
+        int code;
+    }
+
+    /** 调 pdftotext 抽文本。返回 null = 工具拉不起来（调用方报「pdf工具缺失」）。 */
+    static PdfOut pdfText(File f, String tool, int from, int to, long timeoutMs) throws Exception {
+        List<String> cmd = new ArrayList<String>();
+        cmd.add(tool);
+        cmd.add("-layout");
+        cmd.add("-enc");
+        cmd.add("UTF-8");
+        if (from > 0) { cmd.add("-f"); cmd.add(String.valueOf(from)); }
+        if (to > 0) { cmd.add("-l"); cmd.add(String.valueOf(to)); }
+        cmd.add(f.getAbsolutePath());
+        cmd.add("-");
+        Process p;
+        try {
+            p = new ProcessBuilder(cmd).start();
+        } catch (java.io.IOException ioe) {
+            return null;
+        }
+        StringBuilder o = new StringBuilder();
+        StringBuilder e = new StringBuilder();
+        Thread t1 = drain(p.getInputStream(), o);
+        Thread t2 = drain(p.getErrorStream(), e);
+        if (!p.waitFor(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+            p.destroyForcibly();
+            throw new java.io.IOException("pdftotext 超时");
+        }
+        t1.join(3000L);
+        t2.join(3000L);
+        String raw = o.toString();
+        PdfOut out = new PdfOut();
+        for (int i = 0; i < raw.length(); i++) if (raw.charAt(i) == '\f') out.pages++;
+        if (out.pages == 0 && raw.trim().length() > 0) out.pages = 1;
+        out.text = raw.replace("\f", "\n");
+        out.err = Str.cut(Str.oneLine(e.toString()), 200);
+        out.code = p.exitValue();
+        return out;
+    }
+
+    static Thread drain(final InputStream in, final StringBuilder sb) {
+        Thread t = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    java.io.InputStreamReader r = new java.io.InputStreamReader(in, "UTF-8");
+                    char[] buf = new char[8192];
+                    int n;
+                    while ((n = r.read(buf)) > 0) sb.append(buf, 0, n);
+                } catch (Throwable ignored) {
+                }
+            }
+        });
+        t.setDaemon(true);
+        t.start();
+        return t;
+    }
+
+    /** 读 ZIP 里某个 entry 的 UTF-8 文本；不存在返回 null。 */
+    static String zipEntry(File f, String name) {
+        ZipFile z = null;
+        try {
+            z = new ZipFile(f);
+            ZipEntry en = z.getEntry(name);
+            if (en == null) return null;
+            InputStream in = z.getInputStream(en);
+            try {
+                ByteArrayOutputStream bo = new ByteArrayOutputStream();
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
+                return new String(bo.toByteArray(), "UTF-8");
+            } finally {
+                in.close();
+            }
+        } catch (Throwable t) {
+            return null;
+        } finally {
+            if (z != null) { try { z.close(); } catch (Throwable ignored) { } }
+        }
+    }
+
+    /** ZIP 里以某前缀开头的 entry，按结尾数字排序（sheet2 在 sheet10 之前）。 */
+    static List<String> zipNames(File f, String prefix) {
+        List<String> out = new ArrayList<String>();
+        ZipFile z = null;
+        try {
+            z = new ZipFile(f);
+            java.util.Enumeration<? extends ZipEntry> en = z.entries();
+            while (en.hasMoreElements()) {
+                String nm = en.nextElement().getName();
+                if (nm.startsWith(prefix) && nm.endsWith(".xml")) out.add(nm);
+            }
+        } catch (Throwable ignored) {
+        } finally {
+            if (z != null) { try { z.close(); } catch (Throwable ignored) { } }
+        }
+        final java.util.Map<String, Integer> num = new java.util.HashMap<String, Integer>();
+        for (String nm : out) {
+            Matcher m = Pattern.compile("(\\d+)").matcher(nm.substring(prefix.length()));
+            num.put(nm, m.find() ? Integer.valueOf(m.group(1)) : Integer.valueOf(0));
+        }
+        Collections.sort(out, new Comparator<String>() {
+            @Override
+            public int compare(String x, String y) {
+                return num.get(x).compareTo(num.get(y));
+            }
+        });
+        return out;
+    }
+
+    /** docx：word/document.xml 里 <w:t> 的文本；段落/表格/换行转成换行或制表。 */
+    static String docxText(File f) {
+        String xml = zipEntry(f, "word/document.xml");
+        if (xml == null) return null;
+        String s = xml;
+        s = s.replaceAll("(?is)<w:tab[^>]*/>", "\t");
+        s = s.replaceAll("(?is)<w:br[^>]*/>|</w:p>|</w:tr>", "\n");
+        s = s.replaceAll("(?is)</w:tc>", "\t");
+        s = s.replaceAll("(?is)<[^>]+>", "");
+        return unescapeXml(s);
+    }
+
+    /** xlsx：共享字符串表 + 每张工作表逐行逐格拼成制表符文本。 */
+    static String xlsxText(File f) {
+        List<String> shared = new ArrayList<String>();
+        String ss = zipEntry(f, "xl/sharedStrings.xml");
+        if (ss != null) {
+            Matcher m = Pattern.compile("(?is)<si\\b[^>]*>(.*?)</si>").matcher(ss);
+            while (m.find()) shared.add(unescapeXml(m.group(1).replaceAll("(?is)<[^>]+>", "")));
+        }
+        List<String> names = new ArrayList<String>();
+        String wb = zipEntry(f, "xl/workbook.xml");
+        if (wb != null) {
+            Matcher m = Pattern.compile("(?is)<sheet\\b[^>]*name=\"([^\"]*)\"").matcher(wb);
+            while (m.find()) names.add(unescapeXml(m.group(1)));
+        }
+        List<String> sheets = zipNames(f, "xl/worksheets/sheet");
+        if (sheets.isEmpty()) return null;
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < sheets.size(); i++) {
+            String xml = zipEntry(f, sheets.get(i));
+            if (xml == null) continue;
+            String title = i < names.size() ? names.get(i) : ("sheet" + (i + 1));
+            sb.append("### ").append(title).append('\n');
+            Matcher rows = Pattern.compile("(?is)<row\\b[^>]*>(.*?)</row>").matcher(xml);
+            while (rows.find()) {
+                List<String> cells = new ArrayList<String>();
+                Matcher cs = Pattern.compile("(?is)<c\\b([^>]*?)(?:/>|>(.*?)</c>)").matcher(rows.group(1));
+                while (cs.find()) {
+                    String attrs = cs.group(1) == null ? "" : cs.group(1);
+                    String body = cs.group(2) == null ? "" : cs.group(2);
+                    String ty = attr(attrs, "t");
+                    String val;
+                    if ("s".equals(ty)) {
+                        String v = inner(body, "v");
+                        int idx = -1;
+                        try { idx = Integer.parseInt(Str.trim(v)); } catch (Throwable ignored) { }
+                        val = (idx >= 0 && idx < shared.size()) ? shared.get(idx) : "";
+                    } else if ("inlineStr".equals(ty)) {
+                        val = unescapeXml(inner(body, "t").replaceAll("(?is)<[^>]+>", ""));
+                    } else {
+                        val = unescapeXml(inner(body, "v"));
+                    }
+                    cells.add(Str.nz(val).replace('\n', ' ').trim());
+                }
+                sb.append(Str.join(cells, "\t")).append('\n');
+            }
+            sb.append('\n');
+        }
+        return sb.toString();
+    }
+
+    /** pptx：按页取 <a:t> 文本，段落一行。 */
+    static String pptxText(File f) {
+        List<String> slides = zipNames(f, "ppt/slides/slide");
+        if (slides.isEmpty()) return null;
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < slides.size(); i++) {
+            String xml = zipEntry(f, slides.get(i));
+            if (xml == null) continue;
+            sb.append("--- 第 ").append(i + 1).append(" 页 ---\n");
+            Matcher ps = Pattern.compile("(?is)<a:p\\b[^>]*>(.*?)</a:p>").matcher(xml);
+            while (ps.find()) {
+                StringBuilder line = new StringBuilder();
+                Matcher ts = Pattern.compile("(?is)<a:t>(.*?)</a:t>").matcher(ps.group(1));
+                while (ts.find()) line.append(unescapeXml(ts.group(1)));
+                String t = line.toString().trim();
+                if (!t.isEmpty()) sb.append(t).append('\n');
+            }
+            sb.append('\n');
+        }
+        return sb.toString();
+    }
+
+    static String attr(String attrs, String name) {
+        Matcher m = Pattern.compile("(?is)\\b" + Pattern.quote(name) + "\\s*=\\s*\"([^\"]*)\"").matcher(attrs == null ? "" : attrs);
+        return m.find() ? m.group(1) : "";
+    }
+
+    static String inner(String xml, String tag) {
+        Matcher m = Pattern.compile("(?is)<" + Pattern.quote(tag) + "\\b[^>]*>(.*?)</" + Pattern.quote(tag) + ">").matcher(xml == null ? "" : xml);
+        return m.find() ? m.group(1) : "";
+    }
+
+    static String unescapeXml(String s) {
+        if (s == null) return "";
+        String t = s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"")
+                .replace("&apos;", "'").replace("&nbsp;", " ").replace("&amp;", "&");
+        Matcher m = Pattern.compile("&#(x?)([0-9a-fA-F]+);").matcher(t);
+        StringBuffer sb = new StringBuffer();
+        while (m.find()) {
+            String rep = m.group(0);
+            try {
+                int cp = m.group(1).isEmpty() ? Integer.parseInt(m.group(2)) : Integer.parseInt(m.group(2), 16);
+                rep = new String(Character.toChars(cp));
+            } catch (Throwable ignored) {
+            }
+            m.appendReplacement(sb, Matcher.quoteReplacement(rep));
+        }
+        m.appendTail(sb);
+        return sb.toString();
+    }
+
+    /** 压掉行尾空白与连续空行。 */
+    static String tidy(String s) {
+        if (s == null) return "";
+        String[] lines = s.replace("\r\n", "\n").replace('\r', '\n').split("\n", -1);
+        StringBuilder sb = new StringBuilder();
+        int blank = 0;
+        for (String line : lines) {
+            String t = line.replaceAll("[ \\t\\u00a0]+", " ").trim();
+            if (t.isEmpty()) {
+                blank++;
+                if (blank > 1) continue;
+            } else {
+                blank = 0;
+            }
+            sb.append(t).append('\n');
+        }
+        return sb.toString().trim();
+    }
 
     /** prompt.md 里的配置与文案（每次调用重读）。 */
     private static final class Cfg {

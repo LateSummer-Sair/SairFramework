@@ -6,11 +6,21 @@
   "Skill": {
     // ── 谁能用（没列到 = 未授权）
     "Run": {
-      // ── 抓取一个网址的内容（web）
+      // ── 抓取或「看见」一个网址（web）
       // 抓网页正文
       ["web"]: ["ALLUSER"]
     },
     // ── 谁不能用（压过 Run）
-    "Ban": {}
+    "Ban": {
+      // ── 抓取或「看见」一个网址（web）
+      // 在 Web 容器当前页面里执行一段 JS
+      // 关掉 Web 容器
+      // 无头 Edge 取执行完 JS 的 DOM 并转
+      // 用 DeepSeek 官方 Fetch 接口抓网
+      // 无头 Edge 截图 + 直接让会看图的模型说清
+      // 让 Web 容器里的页面跳到某个网址
+      // 无头 Edge 给网页截图存到 files/we
+      ["web.act", "web.close", "web.dom", "web.fetch", "web.look", "web.nav", "web.shot"]: ["ALLUSER"]
+    }
   }
 }

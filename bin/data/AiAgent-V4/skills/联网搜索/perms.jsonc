@@ -7,10 +7,14 @@
     // ── 谁能用（没列到 = 未授权）
     "Run": {
       // ── 联网搜索（search）
-      // 必应联网搜索
+      // 联网搜索
       ["search"]: ["ALLUSER"]
     },
     // ── 谁不能用（压过 Run）
-    "Ban": {}
+    "Ban": {
+      // ── 联网搜索（search）
+      // DeepSeek 官方 Search 接口
+      ["search.ds"]: ["ALLUSER"]
+    }
   }
 }
